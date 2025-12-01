@@ -340,7 +340,7 @@ This is where we put your AWS credentials. They're stored securely and never exp
 
 4. Click **Save**
 5. Goto Security Rules section in your function, and paste this there:
-   ```
+   ```json
    {
     "advancedio": {
         "aws_handler": [
