@@ -420,18 +420,15 @@ You should see:
 
 ```json
 {
-  "success": true,
+  "status": "failure",
   "data": {
-    "status": "healthy",
-    "service": "AWS CloudOps Handler",
-    "version": "1.0.0",
-    "region": "ap-south-1",
-    "bedrockRegion": "us-east-1"
+    "message": "No privileges to perform this action.",
+    "error_code": "NO_ACCESS"
   }
 }
 ```
 
-If you see that, your server is running!
+If you see that, your server is running! (the status is failure, cuz ofc you can't access it wihtout Zoho OAuth 2.0 😂)
 
 ---
 
