@@ -1,0 +1,1676 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AWS Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --bg-primary: #15202B;
+            --bg-secondary: #142230;
+            --bg-card: #1C2D3F;
+            --bg-hover: #243447;
+            --border-primary: #2A3F54;
+            --border-light: #344E68;
+            --text-primary: #E7E9EA;
+            --text-secondary: #8B98A5;
+            --text-muted: #6B7280;
+            --status-ok: #00C853;
+            --status-warning: #FFB300;
+            --status-error: #FF5252;
+            --aws-orange: #FF9900;
+            --aws-orange-light: #FFB84D;
+            --aws-blue: #3B82F6;
+            --aws-purple: #8B5CF6;
+            --aws-green: #10B981;
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+            --shadow-sm: 0 2px 8px rgba(0,0,0,0.2);
+            --shadow-md: 0 4px 16px rgba(0,0,0,0.3);
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-size: 14px;
+            line-height: 1.5;
+            padding: 20px;
+            min-height: 100vh;
+        }
+
+        /* Loading Screen */
+        .loading-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: var(--bg-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .loading-content { text-align: center; }
+
+        .loading-logo {
+            width: 72px;
+            height: 72px;
+            background: linear-gradient(135deg, var(--aws-orange) 0%, var(--aws-orange-light) 100%);
+            border-radius: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 24px;
+            box-shadow: 0 8px 24px rgba(255, 153, 0, 0.3);
+            animation: float 2s ease-in-out infinite;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-8px); }
+        }
+
+        .loading-logo svg {
+            width: 40px;
+            height: 40px;
+            fill: #fff;
+        }
+
+        .loading-spinner {
+            width: 48px;
+            height: 48px;
+            border: 3px solid var(--border-primary);
+            border-top-color: var(--aws-orange);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .loading-text {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+        }
+
+        .loading-subtext {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .main-content {
+            display: none;
+            animation: fadeIn 0.4s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .region-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            background: var(--bg-card);
+            padding: 6px 12px;
+            border-radius: 20px;
+            border: 1px solid var(--border-primary);
+        }
+
+        .region-badge svg {
+            width: 14px;
+            height: 14px;
+            stroke: var(--aws-orange);
+        }
+
+        .health-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 24px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .health-badge svg { width: 16px; height: 16px; }
+
+        .health-badge.healthy {
+            background: rgba(0,200,83,0.15);
+            color: var(--status-ok);
+            border: 1px solid rgba(0,200,83,0.3);
+        }
+        .health-badge.warning {
+            background: rgba(255,179,0,0.15);
+            color: var(--status-warning);
+            border: 1px solid rgba(255,179,0,0.3);
+        }
+        .health-badge.critical {
+            background: rgba(255,82,82,0.15);
+            color: var(--status-error);
+            border: 1px solid rgba(255,82,82,0.3);
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 14px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-primary);
+            border-radius: var(--radius-md);
+            padding: 14px;
+            transition: all 0.2s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+        }
+
+        .stat-card.ec2::before { background: linear-gradient(90deg, var(--aws-orange), var(--aws-orange-light)); }
+        .stat-card.s3::before { background: linear-gradient(90deg, var(--aws-green), #34D399); }
+        .stat-card.lambda::before { background: linear-gradient(90deg, var(--aws-purple), #A78BFA); }
+        .stat-card.alarms::before { background: linear-gradient(90deg, var(--status-error), #FF8A80); }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+            border-color: var(--border-light);
+        }
+
+        .stat-card.alarm-active {
+            border-color: var(--status-error);
+            animation: pulse-border 2s infinite;
+        }
+
+        @keyframes pulse-border {
+            0%, 100% { border-color: var(--status-error); }
+            50% { border-color: rgba(255,82,82,0.3); }
+        }
+
+        .stat-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .stat-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: var(--radius-sm);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .stat-icon.ec2 { background: rgba(255,153,0,0.15); }
+        .stat-icon.s3 { background: rgba(16,185,129,0.15); }
+        .stat-icon.lambda { background: rgba(139,92,246,0.15); }
+        .stat-icon.alarms { background: rgba(255,82,82,0.15); }
+
+        .stat-icon svg { width: 20px; height: 20px; }
+
+        .stat-icon.ec2 svg { stroke: var(--aws-orange); }
+        .stat-icon.s3 svg { stroke: var(--aws-green); }
+        .stat-icon.lambda svg { stroke: var(--aws-purple); }
+        .stat-icon.alarms svg { stroke: var(--status-error); }
+
+        .stat-title {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 500;
+        }
+
+        .stat-value {
+            font-size: 28px;
+            font-weight: 700;
+            line-height: 1;
+            margin-bottom: 6px;
+        }
+
+        .stat-value.orange { color: var(--aws-orange); }
+        .stat-value.green { color: var(--aws-green); }
+        .stat-value.purple { color: var(--aws-purple); }
+        .stat-value.red { color: var(--status-error); }
+
+        .stat-meta {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 11px;
+        }
+
+        .stat-meta-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            color: var(--text-secondary);
+        }
+
+        .status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+        }
+
+        .status-dot.running {
+            background: var(--status-ok);
+            box-shadow: 0 0 8px rgba(0,200,83,0.5);
+        }
+        .status-dot.stopped { background: var(--status-error); }
+        .status-dot.ok {
+            background: var(--status-ok);
+            box-shadow: 0 0 8px rgba(0,200,83,0.5);
+        }
+        .status-dot.alarm {
+            background: var(--status-error);
+            animation: pulse-dot 1.5s infinite;
+        }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; box-shadow: 0 0 8px rgba(255,82,82,0.8); }
+            50% { opacity: 0.6; box-shadow: 0 0 4px rgba(255,82,82,0.4); }
+        }
+
+        /* Section Cards */
+        .section-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-primary);
+            border-radius: var(--radius-md);
+            overflow: hidden;
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 18px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-primary);
+        }
+
+        .section-title {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .section-title-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: var(--radius-sm);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .section-title-icon.cost { background: rgba(16,185,129,0.15); }
+        .section-title-icon.cost svg { stroke: var(--aws-green); width: 18px; height: 18px; }
+        .section-title-icon.ec2 { background: rgba(255,153,0,0.15); }
+        .section-title-icon.ec2 svg { stroke: var(--aws-orange); width: 18px; height: 18px; }
+        .section-title-icon.s3 { background: rgba(16,185,129,0.15); }
+        .section-title-icon.s3 svg { stroke: var(--aws-green); width: 18px; height: 18px; }
+        .section-title-icon.lambda { background: rgba(139,92,246,0.15); }
+        .section-title-icon.lambda svg { stroke: var(--aws-purple); width: 18px; height: 18px; }
+        .section-title-icon.alarms { background: rgba(255,82,82,0.15); }
+        .section-title-icon.alarms svg { stroke: var(--status-error); width: 18px; height: 18px; }
+
+        .section-badge {
+            font-size: 11px;
+            padding: 4px 12px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-primary);
+            border-radius: 20px;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        /* Two Column Layout */
+        .two-col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        /* Cost Section */
+        .cost-section {
+            background: var(--bg-card);
+            border: 1px solid var(--border-primary);
+            border-radius: var(--radius-md);
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+
+        .cost-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr;
+            gap: 1px;
+            background: var(--border-primary);
+        }
+
+        .cost-item {
+            background: var(--bg-card);
+            padding: 20px;
+            text-align: center;
+        }
+
+        .cost-item.main {
+            background: linear-gradient(135deg, rgba(255,153,0,0.1) 0%, rgba(255,153,0,0.05) 100%);
+        }
+
+        .cost-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .cost-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .cost-value.main {
+            font-size: 32px;
+            color: var(--aws-orange);
+        }
+
+        .cost-error {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 24px;
+            background: rgba(255, 179, 0, 0.05);
+        }
+
+        .cost-error-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: rgba(255, 179, 0, 0.15);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .cost-error-icon svg {
+            width: 24px;
+            height: 24px;
+            stroke: var(--status-warning);
+        }
+
+        .cost-error-content h4 {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--status-warning);
+            margin-bottom: 4px;
+        }
+
+        .cost-error-content p {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .cost-error-content code {
+            background: var(--bg-card);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .cost-services {
+            padding: 16px;
+            border-top: 1px solid var(--border-primary);
+        }
+
+        .cost-services-title {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            margin-bottom: 12px;
+        }
+
+        .cost-service-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border-primary);
+        }
+
+        .cost-service-row:last-child { border-bottom: none; }
+
+        .cost-service-info { flex: 1; min-width: 0; }
+
+        .cost-service-name {
+            font-size: 12px;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+
+        .cost-service-bar {
+            height: 4px;
+            background: var(--bg-secondary);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .cost-service-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--aws-orange), var(--aws-orange-light));
+            border-radius: 2px;
+        }
+
+        .cost-service-value {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-left: 16px;
+        }
+
+        /* Cost Breakdown Error State */
+        .cost-breakdown-error {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 32px 20px;
+            text-align: center;
+        }
+
+        .cost-breakdown-error-icon {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, rgba(16,185,129,0.15) 0%, rgba(16,185,129,0.05) 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 16px;
+        }
+
+        .cost-breakdown-error-icon svg {
+            width: 32px;
+            height: 32px;
+            stroke: var(--aws-green);
+            opacity: 0.6;
+        }
+
+        .cost-breakdown-error-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+        }
+
+        .cost-breakdown-error-text {
+            font-size: 12px;
+            color: var(--text-muted);
+            max-width: 220px;
+            line-height: 1.5;
+            margin-bottom: 12px;
+        }
+
+        .cost-breakdown-error-permission {
+            display: inline-block;
+        }
+
+        .cost-breakdown-error-permission code {
+            font-size: 11px;
+            background: var(--bg-secondary);
+            color: var(--aws-green);
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: 1px solid var(--border-primary);
+            font-family: 'SF Mono', Monaco, monospace;
+        }
+
+        /* Lists */
+        .instance-list, .s3-list, .lambda-list, .alarm-list, .rds-list, .log-list {
+            max-height: 320px;
+            overflow-y: auto;
+        }
+
+        /* Instance Rows */
+        .instance-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border-primary);
+            transition: background 0.15s ease;
+        }
+        .instance-row:last-child { border-bottom: none; }
+        .instance-row:hover { background: var(--bg-hover); }
+
+        .instance-status {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-top: 5px;
+            flex-shrink: 0;
+        }
+        .instance-status.running {
+            background: var(--status-ok);
+            box-shadow: 0 0 8px rgba(0,200,83,0.5);
+        }
+        .instance-status.stopped { background: var(--status-error); }
+        .instance-status.pending {
+            background: var(--status-warning);
+            animation: pulse-dot 1.5s infinite;
+        }
+
+        .instance-info { flex: 1; min-width: 0; }
+        .instance-name {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 2px;
+        }
+        .instance-id {
+            font-size: 11px;
+            color: var(--text-muted);
+            font-family: monospace;
+            margin-bottom: 6px;
+        }
+        .instance-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .instance-meta-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+        .instance-meta-item svg {
+            width: 12px;
+            height: 12px;
+            stroke: var(--text-muted);
+        }
+        .instance-meta-item.public-ip { color: var(--aws-green); }
+        .instance-meta-item.public-ip svg { stroke: var(--aws-green); }
+
+        .instance-right {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 6px;
+        }
+        .instance-type {
+            font-size: 11px;
+            color: var(--text-muted);
+            background: var(--bg-secondary);
+            padding: 3px 8px;
+            border-radius: 4px;
+        }
+        .instance-state-badge {
+            font-size: 10px;
+            font-weight: 600;
+            padding: 3px 10px;
+            border-radius: 12px;
+            text-transform: uppercase;
+        }
+        .instance-state-badge.running {
+            background: rgba(0,200,83,0.15);
+            color: var(--status-ok);
+        }
+        .instance-state-badge.stopped {
+            background: rgba(255,82,82,0.15);
+            color: var(--status-error);
+        }
+        .instance-state-badge.pending {
+            background: rgba(255,179,0,0.15);
+            color: var(--status-warning);
+        }
+
+        /* S3 Rows */
+        .s3-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 18px;
+            border-bottom: 1px solid var(--border-primary);
+            transition: background 0.15s ease;
+        }
+        .s3-row:last-child { border-bottom: none; }
+        .s3-row:hover { background: var(--bg-hover); }
+
+        .s3-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: var(--radius-sm);
+            background: rgba(16,185,129,0.15);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .s3-icon svg {
+            width: 18px;
+            height: 18px;
+            stroke: var(--aws-green);
+        }
+
+        .s3-info { flex: 1; min-width: 0; }
+        .s3-name {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .s3-meta {
+            display: flex;
+            gap: 12px;
+        }
+        .s3-meta-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+        .s3-meta-item svg {
+            width: 12px;
+            height: 12px;
+            stroke: var(--text-muted);
+        }
+
+        /* Lambda Rows */
+        .lambda-row {
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border-primary);
+            transition: background 0.15s ease;
+        }
+        .lambda-row:last-child { border-bottom: none; }
+        .lambda-row:hover { background: var(--bg-hover); }
+
+        .lambda-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 8px;
+        }
+        .lambda-name-wrapper {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+        }
+        .lambda-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: var(--radius-sm);
+            background: rgba(139,92,246,0.15);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .lambda-icon svg {
+            width: 16px;
+            height: 16px;
+            stroke: var(--aws-purple);
+        }
+        .lambda-name-info { flex: 1; }
+        .lambda-name {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .lambda-desc {
+            display: block;
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+        .lambda-runtime {
+            font-size: 11px;
+            color: var(--aws-purple);
+            background: rgba(139,92,246,0.15);
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-weight: 500;
+        }
+        .lambda-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-left: 42px;
+        }
+        .lambda-meta-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+        .lambda-meta-item svg {
+            width: 12px;
+            height: 12px;
+            stroke: var(--text-muted);
+        }
+
+        /* Alarm Rows */
+        .alarm-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 18px;
+            border-bottom: 1px solid var(--border-primary);
+            transition: background 0.15s ease;
+        }
+        .alarm-row:last-child { border-bottom: none; }
+        .alarm-row:hover { background: var(--bg-hover); }
+        .alarm-row.critical { background: rgba(255,82,82,0.05); }
+
+        .alarm-status {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .alarm-status.ok {
+            background: var(--status-ok);
+            box-shadow: 0 0 8px rgba(0,200,83,0.5);
+        }
+        .alarm-status.alarm {
+            background: var(--status-error);
+            animation: pulse-dot 1.5s infinite;
+        }
+        .alarm-status.insufficient {
+            background: var(--status-warning);
+        }
+
+        .alarm-info { flex: 1; min-width: 0; }
+        .alarm-name {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-bottom: 2px;
+        }
+        .alarm-meta {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .alarm-state {
+            font-size: 10px;
+            font-weight: 600;
+            padding: 4px 10px;
+            border-radius: 12px;
+            text-transform: uppercase;
+        }
+        .alarm-state.ok {
+            background: rgba(0,200,83,0.15);
+            color: var(--status-ok);
+        }
+        .alarm-state.alarm {
+            background: rgba(255,82,82,0.15);
+            color: var(--status-error);
+        }
+        .alarm-state.insufficient {
+            background: rgba(255,179,0,0.15);
+            color: var(--status-warning);
+        }
+
+        /* RDS Rows */
+        .rds-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 18px;
+            border-bottom: 1px solid var(--border-primary);
+            transition: background 0.15s ease;
+        }
+        .rds-row:last-child { border-bottom: none; }
+        .rds-row:hover { background: var(--bg-hover); }
+
+        .rds-status {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .rds-status.running {
+            background: var(--status-ok);
+            box-shadow: 0 0 8px rgba(0,200,83,0.5);
+        }
+        .rds-status.stopped { background: var(--status-error); }
+        .rds-status.pending { background: var(--status-warning); }
+
+        .rds-info { flex: 1; min-width: 0; }
+        .rds-name {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+        .rds-meta {
+            display: flex;
+            gap: 12px;
+        }
+        .rds-meta-item {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .rds-state-badge {
+            font-size: 10px;
+            font-weight: 600;
+            padding: 3px 10px;
+            border-radius: 12px;
+            text-transform: uppercase;
+        }
+        .rds-state-badge.running {
+            background: rgba(0,200,83,0.15);
+            color: var(--status-ok);
+        }
+        .rds-state-badge.stopped {
+            background: rgba(255,82,82,0.15);
+            color: var(--status-error);
+        }
+        .rds-state-badge.pending {
+            background: rgba(255,179,0,0.15);
+            color: var(--status-warning);
+        }
+
+        /* Log Rows */
+        .log-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 18px;
+            border-bottom: 1px solid var(--border-primary);
+            transition: background 0.15s ease;
+        }
+        .log-row:last-child { border-bottom: none; }
+        .log-row:hover { background: var(--bg-hover); }
+
+        .log-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: var(--radius-sm);
+            background: rgba(59,130,246,0.15);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .log-icon svg {
+            width: 16px;
+            height: 16px;
+            stroke: var(--aws-blue);
+        }
+
+        .log-info { flex: 1; min-width: 0; }
+        .log-name {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .log-meta {
+            display: flex;
+            gap: 12px;
+        }
+        .log-meta-item {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        /* Donut Chart */
+        .donut-chart-container {
+            display: flex;
+            align-items: center;
+            gap: 24px;
+            padding: 20px;
+        }
+
+        .donut-chart {
+            position: relative;
+            width: 140px;
+            height: 140px;
+            flex-shrink: 0;
+        }
+
+        .donut-chart svg {
+            width: 100%;
+            height: 100%;
+            transform: rotate(-90deg);
+        }
+
+        .donut-center {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+        }
+
+        .donut-center-value {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--aws-orange);
+        }
+
+        .donut-center-label {
+            font-size: 10px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+
+        .donut-legend {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .donut-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .donut-legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+            flex-shrink: 0;
+        }
+
+        .donut-legend-label {
+            flex: 1;
+            font-size: 12px;
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .donut-legend-value {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+
+        /* Lambda Chart */
+        /* Lambda Activity Chart - New Design */
+        .lambda-activity-container {
+            padding: 16px;
+        }
+
+        .lambda-activity-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+            gap: 16px;
+        }
+
+        .lambda-activity-stat.main {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .lambda-activity-stat-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, rgba(139,92,246,0.2) 0%, rgba(139,92,246,0.1) 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .lambda-activity-stat-icon svg {
+            width: 22px;
+            height: 22px;
+            stroke: var(--aws-purple);
+        }
+
+        .lambda-activity-stat-value {
+            font-size: 26px;
+            font-weight: 700;
+            color: var(--aws-purple);
+            line-height: 1;
+        }
+
+        .lambda-activity-stat-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        .lambda-activity-stats-row {
+            display: flex;
+            gap: 16px;
+        }
+
+        .lambda-activity-mini-stat {
+            text-align: center;
+            padding: 8px 12px;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            min-width: 60px;
+        }
+
+        .lambda-activity-mini-value {
+            display: block;
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--text-primary);
+            line-height: 1.2;
+        }
+
+        .lambda-activity-mini-value.error {
+            color: var(--status-error);
+        }
+
+        .lambda-activity-mini-value small {
+            font-size: 11px;
+            font-weight: 500;
+            opacity: 0.7;
+        }
+
+        .lambda-activity-mini-label {
+            display: block;
+            font-size: 9px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            margin-top: 2px;
+        }
+
+        .lambda-activity-chart {
+            background: linear-gradient(180deg, var(--bg-secondary) 0%, transparent 100%);
+            border-radius: 12px;
+            padding: 12px 8px 8px 8px;
+            margin-bottom: 8px;
+        }
+
+        .lambda-activity-chart svg {
+            width: 100%;
+            height: 80px;
+            display: block;
+        }
+
+        .lambda-activity-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 10px;
+            color: var(--text-muted);
+            padding: 0 4px;
+        }
+
+        .lambda-activity-footer-label {
+            font-size: 10px;
+            color: var(--text-muted);
+            background: var(--bg-secondary);
+            padding: 3px 10px;
+            border-radius: 10px;
+        }
+
+        /* Old Lambda chart styles (keep for compatibility) */
+        .lambda-chart-container { padding: 16px; }
+        .lambda-chart-stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .lambda-stat {
+            text-align: center;
+            padding: 12px;
+            background: var(--bg-secondary);
+            border-radius: var(--radius-sm);
+        }
+        .lambda-stat-value {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--aws-purple);
+            line-height: 1;
+            margin-bottom: 4px;
+        }
+        .lambda-stat-value.error { color: var(--status-error); }
+        .lambda-stat-label {
+            font-size: 10px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+        .lambda-chart {
+            height: 80px;
+            background: var(--bg-secondary);
+            border-radius: var(--radius-sm);
+            padding: 8px;
+        }
+        .lambda-chart svg { width: 100%; height: 100%; }
+        .lambda-chart-footer {
+            text-align: center;
+            font-size: 10px;
+            color: var(--text-muted);
+            margin-top: 8px;
+        }
+
+        /* Empty State */
+        .empty-state {
+            padding: 40px 20px;
+            text-align: center;
+        }
+
+        .empty-state.small { padding: 24px 16px; }
+
+        .empty-icon {
+            width: 56px;
+            height: 56px;
+            background: var(--bg-secondary);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 16px;
+        }
+
+        .empty-state.small .empty-icon { width: 40px; height: 40px; }
+
+        .empty-icon svg {
+            width: 28px;
+            height: 28px;
+            stroke: var(--text-muted);
+        }
+
+        .empty-state.small .empty-icon svg { width: 18px; height: 18px; }
+
+        .empty-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+
+        .empty-state.small .empty-title { font-size: 12px; }
+
+        .empty-text {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .empty-state.small .empty-text { font-size: 10px; }
+
+        /* Error State */
+        .error-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: var(--bg-primary);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .error-content { text-align: center; padding: 20px; }
+
+        .error-icon {
+            width: 72px;
+            height: 72px;
+            background: rgba(255,82,82,0.15);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+        }
+
+        .error-icon svg {
+            width: 36px;
+            height: 36px;
+            stroke: var(--status-error);
+        }
+
+        .error-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+        }
+
+        .error-message {
+            font-size: 13px;
+            color: var(--text-muted);
+            max-width: 300px;
+            margin: 0 auto;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .two-col { grid-template-columns: 1fr; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .cost-grid { grid-template-columns: 1fr; }
+            .lambda-chart-stats { grid-template-columns: repeat(2, 1fr); }
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: var(--bg-secondary); }
+        ::-webkit-scrollbar-thumb { background: var(--border-primary); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
+    </style>
+</head>
+<body>
+    <!-- Loading Screen - Shows INSTANTLY -->
+    <div id="loadingScreen" class="loading-screen">
+        <div class="loading-content">
+            <div class="loading-logo">
+                <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M6.5 17.5c-1.5 0-2.5-1-2.5-2.5 0-1.3.8-2.3 2-2.5 0-2.5 2-4.5 4.5-4.5 2 0 3.7 1.3 4.3 3.2.5-.1 1-.2 1.5-.2 2.2 0 4 1.8 4 4s-1.8 4-4 4h-10z"/>
+                </svg>
+            </div>
+            <div class="loading-spinner"></div>
+            <div class="loading-text">AWS Cloud Commander</div>
+            <div class="loading-subtext">Loading resources from {{REGION}}</div>
+        </div>
+    </div>
+
+    <!-- Error Screen -->
+    <div id="errorScreen" class="error-screen">
+        <div class="error-content">
+            <div class="error-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="12"/>
+                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+            </div>
+            <div class="error-title">Failed to Load Dashboard</div>
+            <div id="errorMessage" class="error-message">An error occurred while fetching AWS data.</div>
+        </div>
+    </div>
+
+    <!-- Main Content - Populated by JavaScript -->
+    <div id="mainContent" class="main-content"></div>
+
+    <script>
+        const REGION = '{{REGION}}';
+        const API_BASE = window.location.origin;
+
+        // Fetch data from backend and render dashboard
+        async function loadDashboard() {
+            try {
+                const response = await fetch(`${API_BASE}/server/aws_handler/widget/dashboard/data?region=${encodeURIComponent(REGION)}`);
+                const data = await response.json();
+
+                if (!data.success) {
+                    throw new Error(data.error || 'Failed to fetch data');
+                }
+
+                renderDashboard(data);
+
+                // Hide loader, show content
+                document.getElementById('loadingScreen').style.display = 'none';
+                document.getElementById('mainContent').style.display = 'block';
+
+            } catch (error) {
+                console.error('Dashboard error:', error);
+                document.getElementById('loadingScreen').style.display = 'none';
+                document.getElementById('errorMessage').textContent = error.message;
+                document.getElementById('errorScreen').style.display = 'flex';
+            }
+        }
+
+        function renderDashboard(data) {
+            const html = `
+                <!-- Header -->
+                <div class="header">
+                    <span class="region-badge">
+                        <svg viewBox="0 0 24 24" fill="none" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"/>
+                            <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                        </svg>
+                        ${data.region}
+                    </span>
+                    <span class="health-badge ${data.health.status}">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                            <polyline points="22 4 12 14.01 9 11.01"/>
+                        </svg>
+                        ${data.health.text}
+                    </span>
+                </div>
+
+                <!-- Stats Grid -->
+                <div class="stats-grid">
+                    <div class="stat-card ec2">
+                        <div class="stat-header">
+                            <div class="stat-icon ec2">
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2">
+                                    <rect x="2" y="3" width="20" height="14" rx="2"/>
+                                    <path d="M8 21h8M12 17v4"/>
+                                </svg>
+                            </div>
+                            <span class="stat-title">EC2 Instances</span>
+                        </div>
+                        <div class="stat-value orange">${data.ec2.total}</div>
+                        <div class="stat-meta">
+                            <span class="stat-meta-item"><span class="status-dot running"></span> ${data.ec2.running} running</span>
+                            <span class="stat-meta-item"><span class="status-dot stopped"></span> ${data.ec2.stopped} stopped</span>
+                        </div>
+                    </div>
+
+                    <div class="stat-card s3">
+                        <div class="stat-header">
+                            <div class="stat-icon s3">
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2">
+                                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+                                    <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+                                    <line x1="12" y1="22.08" x2="12" y2="12"/>
+                                </svg>
+                            </div>
+                            <span class="stat-title">S3 Buckets</span>
+                        </div>
+                        <div class="stat-value green">${data.s3.count}</div>
+                        <div class="stat-meta">
+                            <span class="stat-meta-item">Storage containers</span>
+                        </div>
+                    </div>
+
+                    <div class="stat-card lambda">
+                        <div class="stat-header">
+                            <div class="stat-icon lambda">
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2">
+                                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                                </svg>
+                            </div>
+                            <span class="stat-title">Lambda Functions</span>
+                        </div>
+                        <div class="stat-value purple">${data.lambda.count}</div>
+                        <div class="stat-meta">
+                            <span class="stat-meta-item">Serverless compute</span>
+                        </div>
+                    </div>
+
+                    <div class="stat-card alarms ${data.alarms.hasActive ? 'alarm-active' : ''}">
+                        <div class="stat-header">
+                            <div class="stat-icon alarms">
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2">
+                                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                                    <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                                </svg>
+                            </div>
+                            <span class="stat-title">CloudWatch Alarms</span>
+                        </div>
+                        <div class="stat-value red">${data.alarms.active}</div>
+                        <div class="stat-meta">
+                            <span class="stat-meta-item"><span class="status-dot ok"></span> ${data.alarms.ok} OK</span>
+                            <span class="stat-meta-item"><span class="status-dot alarm"></span> ${data.alarms.total} total</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Cost Section -->
+                <div class="cost-section">
+                    <div class="section-header">
+                        <div class="section-title">
+                            <div class="section-title-icon cost">
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2">
+                                    <line x1="12" y1="1" x2="12" y2="23"/>
+                                    <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                                </svg>
+                            </div>
+                            Cost Overview
+                        </div>
+                        <span class="section-badge">This Month</span>
+                    </div>
+                    ${data.cost.error ? `
+                        <div class="cost-error">
+                            <div class="cost-error-icon">
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"/>
+                                    <line x1="12" y1="8" x2="12" y2="12"/>
+                                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                                </svg>
+                            </div>
+                            <div class="cost-error-content">
+                                <h4>Cost Explorer Access Required</h4>
+                                <p>Add <code>ce:GetCostAndUsage</code> permission to your IAM policy to view cost data.</p>
+                            </div>
+                        </div>
+                    ` : `
+                        <div class="cost-grid">
+                            <div class="cost-item main">
+                                <div class="cost-label">Month to Date</div>
+                                <div class="cost-value main">${data.cost.month}</div>
+                            </div>
+                            <div class="cost-item">
+                                <div class="cost-label">Today</div>
+                                <div class="cost-value">${data.cost.today}</div>
+                            </div>
+                            <div class="cost-item">
+                                <div class="cost-label">Daily Average</div>
+                                <div class="cost-value">${data.cost.dailyAvg}</div>
+                            </div>
+                        </div>
+                        ${data.cost.topServicesHtml ? `<div class="cost-services"><div class="cost-services-title">Top Services</div>${data.cost.topServicesHtml}</div>` : ''}
+                    `}
+                </div>
+
+                <!-- Two Column: EC2 and S3 -->
+                <div class="two-col">
+                    <div class="section-card">
+                        <div class="section-header">
+                            <div class="section-title">
+                                <div class="section-title-icon ec2">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke-width="2">
+                                        <rect x="2" y="3" width="20" height="14" rx="2"/>
+                                        <path d="M8 21h8M12 17v4"/>
+                                    </svg>
+                                </div>
+                                EC2 Instances
+                            </div>
+                            <span class="section-badge">${data.ec2.total} total</span>
+                        </div>
+                        <div class="instance-list">${data.ec2.html}</div>
+                    </div>
+
+                    <div class="section-card">
+                        <div class="section-header">
+                            <div class="section-title">
+                                <div class="section-title-icon s3">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke-width="2">
+                                        <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+                                    </svg>
+                                </div>
+                                S3 Buckets
+                            </div>
+                            <span class="section-badge">${data.s3.count} buckets</span>
+                        </div>
+                        <div class="s3-list">${data.s3.html}</div>
+                    </div>
+                </div>
+
+                <!-- Lambda Functions -->
+                <div class="section-card" style="margin-bottom: 20px;">
+                    <div class="section-header">
+                        <div class="section-title">
+                            <div class="section-title-icon lambda">
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2">
+                                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                                </svg>
+                            </div>
+                            Lambda Functions
+                        </div>
+                        <span class="section-badge">${data.lambda.count} functions</span>
+                    </div>
+                    <div class="lambda-list">${data.lambda.html}</div>
+                </div>
+
+                <!-- CloudWatch Alarms -->
+                <div class="section-card" style="margin-bottom: 20px;">
+                    <div class="section-header">
+                        <div class="section-title">
+                            <div class="section-title-icon alarms">
+                                <svg viewBox="0 0 24 24" fill="none" stroke-width="2">
+                                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                                    <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                                </svg>
+                            </div>
+                            CloudWatch Alarms
+                        </div>
+                        <span class="section-badge">${data.alarms.active} active / ${data.alarms.total} total</span>
+                    </div>
+                    <div class="alarm-list">${data.alarms.html}</div>
+                </div>
+
+                <!-- Two Column: RDS and Logs -->
+                <div class="two-col">
+                    <div class="section-card">
+                        <div class="section-header">
+                            <div class="section-title">
+                                <div class="section-title-icon" style="background: rgba(59,130,246,0.15);">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke-width="2" style="stroke: var(--aws-blue);">
+                                        <ellipse cx="12" cy="5" rx="9" ry="3"/>
+                                        <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+                                        <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+                                    </svg>
+                                </div>
+                                RDS Databases
+                            </div>
+                            <span class="section-badge">${data.rds.count} instances</span>
+                        </div>
+                        <div class="rds-list">${data.rds.html}</div>
+                    </div>
+
+                    <div class="section-card">
+                        <div class="section-header">
+                            <div class="section-title">
+                                <div class="section-title-icon" style="background: rgba(59,130,246,0.15);">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke-width="2" style="stroke: var(--aws-blue);">
+                                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                                        <polyline points="14 2 14 8 20 8"/>
+                                        <line x1="16" y1="13" x2="8" y2="13"/>
+                                        <line x1="16" y1="17" x2="8" y2="17"/>
+                                    </svg>
+                                </div>
+                                CloudWatch Logs
+                            </div>
+                            <span class="section-badge">${data.logs.count} log groups</span>
+                        </div>
+                        <div class="log-list">${data.logs.html}</div>
+                    </div>
+                </div>
+
+                <!-- Charts Section -->
+                <div class="two-col" style="margin-top: 20px;">
+                    <div class="section-card">
+                        <div class="section-header">
+                            <div class="section-title">
+                                <div class="section-title-icon cost">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke-width="2">
+                                        <circle cx="12" cy="12" r="10"/>
+                                        <path d="M12 6v6l4 2"/>
+                                    </svg>
+                                </div>
+                                Cost Breakdown
+                            </div>
+                            <span class="section-badge">By Service</span>
+                        </div>
+                        <div>${data.cost.donutHtml || (data.cost.error ? `
+                            <div class="cost-breakdown-error">
+                                <div class="cost-breakdown-error-icon">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5">
+                                        <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                                    </svg>
+                                </div>
+                                <div class="cost-breakdown-error-title">Cost Data Unavailable</div>
+                                <div class="cost-breakdown-error-text">Enable Cost Explorer API access to view spending breakdown by service</div>
+                                <div class="cost-breakdown-error-permission">
+                                    <code>ce:GetCostAndUsage</code>
+                                </div>
+                            </div>
+                        ` : '<div class="empty-state small"><div class="empty-title">No cost data</div></div>')}</div>
+                    </div>
+
+                    <div class="section-card">
+                        <div class="section-header">
+                            <div class="section-title">
+                                <div class="section-title-icon lambda">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke-width="2">
+                                        <path d="M3 3v18h18"/>
+                                        <path d="M18 17V9"/>
+                                        <path d="M13 17V5"/>
+                                        <path d="M8 17v-3"/>
+                                    </svg>
+                                </div>
+                                Lambda Activity
+                            </div>
+                            <span class="section-badge">Last 24h</span>
+                        </div>
+                        ${data.lambda.chartHtml}
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('mainContent').innerHTML = html;
+        }
+
+        // Start loading data immediately
+        loadDashboard();
+    </script>
+</body>
+</html>
