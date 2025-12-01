@@ -322,7 +322,7 @@ Alright, AWS is set up. Now let's get the server running on Catalyst.
 6. Select **Node.js 18.x** as the stack
 7. Click **Create**
 
-### 3.3 Add Environment Variables
+### 3.3 Add Environment Variables & Put Security Rules
 
 This is where we put your AWS credentials. They're stored securely and never exposed:
 
@@ -339,6 +339,32 @@ This is where we put your AWS credentials. They're stored securely and never exp
 | `BEDROCK_MODEL_ID` | `anthropic.claude-3-sonnet-20240229-v1:0` | Or your chosen model |
 
 4. Click **Save**
+5. Goto Security Rules section in your function, and paste this there:
+   ```
+   {
+    "advancedio": {
+        "aws_handler": [
+            {
+                "/widget/.*": {
+                    "methods": [
+                        "GET"
+                    ],
+                    "authentication": "optional"    // this is not authenticated, but its fine cuz we are only reading not so important data from here
+                }
+            },
+            {
+                ".*": {
+                    "methods": [
+                        "GET",
+                        "POST"
+                    ],
+                    "authentication": "required"
+                }
+            }
+        ]
+    }
+    }
+   ```
 
 **A note about the region**: We're putting `AWS_REGION` in environment variables because Version 1 of the backend uses a single hardcoded region. The frontend already has a region selector that saves to the database - we'll wire that up in Version 2. For now, all operations use whatever region you set here.
 
