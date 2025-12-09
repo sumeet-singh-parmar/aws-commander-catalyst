@@ -130,7 +130,6 @@ First, we need to create a policy that defines what the extension can do. This i
             "Effect": "Allow",
             "Action": [
                 "cloudwatch:DescribeAlarms",
-                "cloudwatch:DescribeAlarmHistory",
                 "cloudwatch:GetMetricStatistics",
                 "cloudwatch:GetMetricData",
                 "cloudwatch:ListMetrics",
@@ -322,7 +321,7 @@ Alright, AWS is set up. Now let's get the server running on Catalyst.
 6. Select **Node.js 18.x** as the stack
 7. Click **Create**
 
-### 3.3 Add Environment Variables & Put Security Rules
+### 3.3 Add Environment Variables
 
 This is where we put your AWS credentials. They're stored securely and never exposed:
 
@@ -339,32 +338,6 @@ This is where we put your AWS credentials. They're stored securely and never exp
 | `BEDROCK_MODEL_ID` | `anthropic.claude-3-sonnet-20240229-v1:0` | Or your chosen model |
 
 4. Click **Save**
-5. Goto Security Rules section in your function, and paste this there:
-   ```json
-   {
-    "advancedio": {
-        "aws_handler": [
-            {
-                "/widget/.*": {
-                    "methods": [
-                        "GET"
-                    ],
-                    "authentication": "optional"    // this is not authenticated, but its fine cuz we are only reading not so important data from here
-                }
-            },
-            {
-                ".*": {
-                    "methods": [
-                        "GET",
-                        "POST"
-                    ],
-                    "authentication": "required"
-                }
-            }
-        ]
-    }
-    }
-   ```
 
 **A note about the region**: We're putting `AWS_REGION` in environment variables because Version 1 of the backend uses a single hardcoded region. The frontend already has a region selector that saves to the database - we'll wire that up in Version 2. For now, all operations use whatever region you set here.
 
@@ -375,27 +348,37 @@ Now we need to get the actual code into Catalyst:
 **Option A: Download and Upload (Easier)**
 
 1. Download the server code as a ZIP from GitHub
-2. In Catalyst, go to your function
-3. Click the **Code** tab
-4. Click **Upload** and select the ZIP file
-5. Make sure the files are at the root level (index.js should be directly visible, not inside another folder)
+2. Extract the ZIP file
+3. Navigate to `server/functions/aws_handler/` folder
+4. Select all files in this folder (index.js, package.json, services/, utils/, etc.)
+5. Create a ZIP file with these files (make sure index.js is at the root of the ZIP)
+6. In Catalyst, go to your function
+7. Click the **Code** tab
+8. Click **Upload** and select the ZIP file
+9. Make sure the files are at the root level (index.js should be directly visible)
 
 **Option B: Use Catalyst CLI (For developers)**
 
 If you're comfortable with command line:
 
 ```bash
-# Clone the repo
-git clone https://github.com/sumeet-singh-parmar/aws-commander-catalyst.git
-cd aws-commander-catalyst/server
+# Navigate to the function directory
+cd server/functions/aws_handler
+
+# Install dependencies locally (optional, for testing)
+npm install
 
 # Install Catalyst CLI if you haven't
 npm install -g zcatalyst-cli
 
-# Login and deploy
+# Login to Catalyst
 catalyst login
+
+# Deploy the function
 catalyst deploy
 ```
+
+**Important**: Make sure you're in the `server/functions/aws_handler/` directory when deploying, as this contains the `catalyst-config.json` file.
 
 ### 3.5 Get Your Server URL
 
@@ -404,8 +387,9 @@ After deploying:
 1. Go to your function in Catalyst console
 2. Look for the **Function URL** - it looks something like:
    ```
-   https://awscloudcommander-60034xxxxx.development.catalystserverless.com/server/
+   https://awscloudcommander-60034xxxxx.development.catalystserverless.com/server/aws_handler/
    ```
+   Note: The URL will include `/aws_handler/` if your function is named `aws_handler`
 3. Copy this URL - you'll need it!
 
 ### 3.6 Test It!
@@ -413,22 +397,25 @@ After deploying:
 Let's make sure everything works. Open a browser and go to your function URL (or use curl):
 
 ```bash
-curl https://your-function-url.catalystserverless.com/server/
+curl https://your-function-url.catalystserverless.com/server/aws_handler/
 ```
 
 You should see:
 
 ```json
 {
-  "status": "failure",
+  "success": true,
   "data": {
-    "message": "No privileges to perform this action.",
-    "error_code": "NO_ACCESS"
+    "status": "healthy",
+    "service": "AWS CloudOps Handler",
+    "version": "1.0.0",
+    "region": "ap-south-1",
+    "bedrockRegion": "us-east-1"
   }
 }
 ```
 
-If you see that, your server is running! (the status is failure, cuz ofc you can't access it wihtout Zoho OAuth 2.0 😂)
+If you see that, your server is running!
 
 ---
 
@@ -440,8 +427,10 @@ Almost done! Now we need to tell the extension to use YOUR server instead of the
 
 1. Open the extension in Zoho Cliq Developer Console
 2. Go to **Connections**
-3. Find the `aws_catalyst_oauth` connection
+3. Find the `awscloudcommander` connection (or similar OAuth connection)
 4. Update the **Base URL** to your Catalyst function URL
+   - Make sure it ends with `/aws_handler/` (or your function name)
+   - Example: `https://your-project.development.catalystserverless.com/server/aws_handler/`
 5. Re-authorize the connection
 
 ### For End Users (Using /aws settings)
@@ -449,10 +438,10 @@ Almost done! Now we need to tell the extension to use YOUR server instead of the
 1. Open Zoho Cliq
 2. Type `/aws settings`
 3. Look for the **Backend Server URL** field
-4. Enter your Catalyst function URL
-5. Save
+4. Enter your Catalyst function URL (ending with `/aws_handler/`)
+5. Click **Save** or submit the form
 
-> **Note for v1**: The settings UI is ready, but the backend URL switching is fully implemented in v2. For v1, you'll need to update the connection at the extension level.
+The extension will validate the URL by checking the `/status` endpoint.
 
 ### Test the Connection
 
@@ -511,12 +500,16 @@ If you see data from YOUR AWS account, congratulations - you're done!
 Try testing the server directly:
 
 ```bash
-curl -X POST https://your-function-url/server/ \
+# Health check
+curl https://your-function-url/server/aws_handler/
+
+# Test EC2 list (will fail without OAuth, but shows if server is running)
+curl -X POST https://your-function-url/server/aws_handler/ \
   -H "Content-Type: application/json" \
   -d '{"service":"ec2","action":"list"}'
 ```
 
-This bypasses Cliq and talks directly to your server. If this works but Cliq doesn't, the issue is with the OAuth connection.
+Note: The POST request will likely fail with authentication errors, but if you get a response (even an error), it means your server is running. The OAuth connection handles authentication from Cliq.
 
 ---
 
@@ -525,8 +518,8 @@ This bypasses Cliq and talks directly to your server. If this works but Cliq doe
 Want to test the server on your machine before deploying? Here's how:
 
 ```bash
-# Go to the server folder
-cd server
+# Go to the function folder
+cd server/functions/aws_handler
 
 # Install dependencies
 npm install
@@ -549,11 +542,13 @@ $env:BEDROCK_MODEL_ID="anthropic.claude-3-sonnet-20240229-v1:0"
 node index.js
 ```
 
-The server will start on `http://localhost:9000`. Test it with:
+The server will start on `http://localhost:9000` (or the port specified in your config). Test it with:
 
 ```bash
 curl http://localhost:9000
 ```
+
+**Note**: Local testing won't have Catalyst SDK, so some features (like user credentials from Data Store) won't work. The server will fall back to using environment variables for AWS credentials.
 
 ---
 
@@ -574,8 +569,12 @@ A few things to keep in mind:
 When we release updates:
 
 1. Download the new code (or `git pull`)
-2. Deploy to Catalyst again (upload ZIP or `catalyst deploy`)
-3. That's it - your environment variables stay the same
+2. Navigate to `server/functions/aws_handler/` directory
+3. Deploy to Catalyst again:
+   - **Option A**: Upload new ZIP file via Catalyst console
+   - **Option B**: Run `catalyst deploy` from the function directory
+4. Your environment variables stay the same - no need to reconfigure them
+5. Test the health endpoint to verify the update worked
 
 ---
 
