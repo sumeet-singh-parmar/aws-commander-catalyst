@@ -66,15 +66,36 @@ First, we need to create a policy that defines what the extension can do. This i
                 "ec2:StopInstances",
                 "ec2:RebootInstances",
                 "ec2:TerminateInstances",
-                "ec2:DescribeSecurityGroups",
+                "ec2:GetConsoleOutput",
+                "ec2:DescribeVolumes",
+                "ec2:CreateSnapshot",
+                "ec2:CreateImage",
+                "ec2:CreateTags",
+                "ec2:DescribeSnapshots",
+                "ec2:DescribeImages",
+                "ec2:AllocateAddress",
+                "ec2:AssociateAddress",
+                "ec2:DisassociateAddress",
+                "ec2:DescribeAddresses",
+                "ec2:ReleaseAddress",
+                "ec2:ModifyInstanceAttribute",
+                "ec2:DescribeInstanceTypes",
                 "ec2:DescribeVpcs",
                 "ec2:DescribeSubnets",
-                "ec2:DescribeTags",
-                "ec2:DescribeImages",
-                "ec2:DescribeVolumes",
-                "ec2:DescribeKeyPairs",
-                "ec2:DescribeRegions",
-                "ec2:DescribeAvailabilityZones"
+                "ec2:DescribeSecurityGroups",
+                "ec2:AuthorizeSecurityGroupIngress",
+                "ec2:AuthorizeSecurityGroupEgress",
+                "ec2:RevokeSecurityGroupIngress",
+                "ec2:RevokeSecurityGroupEgress"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "CostExplorerBasic",
+            "Effect": "Allow",
+            "Action": [
+                "ce:GetCostAndUsage",
+                "ce:GetCostForecast"
             ],
             "Resource": "*"
         },
@@ -85,17 +106,11 @@ First, we need to create a policy that defines what the extension can do. This i
                 "s3:ListAllMyBuckets",
                 "s3:ListBucket",
                 "s3:GetBucketLocation",
-                "s3:GetBucketTagging",
-                "s3:GetBucketVersioning",
-                "s3:GetBucketAcl",
                 "s3:GetObject",
-                "s3:GetObjectAcl",
-                "s3:GetObjectTagging",
                 "s3:PutObject",
                 "s3:DeleteObject",
                 "s3:CreateBucket",
-                "s3:DeleteBucket",
-                "s3:PutBucketTagging"
+                "s3:DeleteBucket"
             ],
             "Resource": "*"
         },
@@ -105,10 +120,12 @@ First, we need to create a policy that defines what the extension can do. This i
             "Action": [
                 "lambda:ListFunctions",
                 "lambda:GetFunction",
-                "lambda:GetFunctionConfiguration",
-                "lambda:GetFunctionUrlConfig",
                 "lambda:InvokeFunction",
-                "lambda:ListTags"
+                "lambda:UpdateFunctionCode",
+                "lambda:UpdateFunctionConfiguration",
+                "lambda:GetFunctionConfiguration",
+                "logs:FilterLogEvents",
+                "logs:GetLogEvents"
             ],
             "Resource": "*"
         },
@@ -118,7 +135,7 @@ First, we need to create a policy that defines what the extension can do. This i
             "Action": [
                 "rds:DescribeDBInstances",
                 "rds:DescribeDBClusters",
-                "rds:ListTagsForResource",
+                "rds:DescribeDBSnapshots",
                 "rds:StartDBInstance",
                 "rds:StopDBInstance",
                 "rds:RebootDBInstance"
@@ -130,26 +147,16 @@ First, we need to create a policy that defines what the extension can do. This i
             "Effect": "Allow",
             "Action": [
                 "cloudwatch:DescribeAlarms",
+                "cloudwatch:DescribeAlarmHistory",
                 "cloudwatch:GetMetricStatistics",
-                "cloudwatch:GetMetricData",
                 "cloudwatch:ListMetrics",
-                "cloudwatch:EnableAlarmActions",
-                "cloudwatch:DisableAlarmActions",
+                "cloudwatch:PutMetricAlarm",
+                "cloudwatch:DeleteAlarms",
                 "cloudwatch:SetAlarmState",
-                "cloudwatch:DeleteAlarms"
-            ],
-            "Resource": "*"
-        },
-        {
-            "Sid": "CloudWatchLogsAccess",
-            "Effect": "Allow",
-            "Action": [
-                "logs:DescribeLogGroups",
                 "logs:DescribeLogStreams",
+                "logs:DescribeLogGroups",
                 "logs:GetLogEvents",
-                "logs:FilterLogEvents",
-                "logs:CreateLogGroup",
-                "logs:DeleteLogGroup"
+                "logs:FilterLogEvents"
             ],
             "Resource": "*"
         },
@@ -158,37 +165,10 @@ First, we need to create a policy that defines what the extension can do. This i
             "Effect": "Allow",
             "Action": [
                 "sns:ListTopics",
-                "sns:GetTopicAttributes",
+                "sns:ListSubscriptions",
                 "sns:ListSubscriptionsByTopic",
+                "sns:GetTopicAttributes",
                 "sns:Publish"
-            ],
-            "Resource": "*"
-        },
-        {
-            "Sid": "CostExplorerAccess",
-            "Effect": "Allow",
-            "Action": [
-                "ce:GetCostAndUsage",
-                "ce:GetCostForecast"
-            ],
-            "Resource": "*"
-        },
-        {
-            "Sid": "IAMReadAccess",
-            "Effect": "Allow",
-            "Action": [
-                "iam:GetUser",
-                "iam:ListUsers",
-                "iam:ListRoles",
-                "iam:GetAccountSummary"
-            ],
-            "Resource": "*"
-        },
-        {
-            "Sid": "STSAccess",
-            "Effect": "Allow",
-            "Action": [
-                "sts:GetCallerIdentity"
             ],
             "Resource": "*"
         },
@@ -198,6 +178,28 @@ First, we need to create a policy that defines what the extension can do. This i
             "Action": [
                 "bedrock:InvokeModel",
                 "bedrock:InvokeModelWithResponseStream"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "MarketplaceForBedrock",
+            "Effect": "Allow",
+            "Action": [
+                "aws-marketplace:ViewSubscriptions",
+                "aws-marketplace:Subscribe",
+                "aws-marketplace:Unsubscribe"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "IAMReadAccess",
+            "Effect": "Allow",
+            "Action": [
+                "iam:ListUsers",
+                "iam:ListRoles",
+                "iam:GetUser",
+                "iam:GetAccountSummary",
+                "iam:ListPolicies"
             ],
             "Resource": "*"
         }
