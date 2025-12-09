@@ -1,0 +1,3506 @@
+// ============================================================================
+// AWS Cloud Commander - /aws Command Execution Handler
+// ============================================================================
+// Purpose: Main entry point for all /aws slash commands in Zoho Cliq
+// 
+// This handler processes user commands like:
+//   - /aws                    → Shows interactive dashboard
+//   - /aws ec2                → Lists EC2 instances
+//   - /aws s3                 → Lists S3 buckets
+//   - /aws help               → Shows command reference
+//   - /aws cost               → Shows AWS spending (requires consent)
+//   - And 50+ other commands
+//
+// Flow:
+//   1. Parses command arguments and extracts subcommand
+//   2. Fetches user's custom backend URL if configured (Option 3)
+//   3. Verifies user has AWS credentials configured
+//   4. Routes to appropriate service handler (EC2, S3, Lambda, etc.)
+//   5. Formats response as Cliq cards with buttons and slides
+//
+// Key Features:
+//   - Dynamic backend URL support (for self-hosted instances)
+//   - Credential verification before each command
+//   - Pagination support for list operations
+//   - Dynamic notification system integration
+//   - Consent management for paid APIs
+// ============================================================================
+
+DEFAULT_API_URL = "https://aws-cloudops-906900311.development.catalystserverless.com/server/aws_handler/";
+CONNECTION_NAME = "awscloudcommander";
+
+// Parse command arguments
+args = ifnull(arguments,"").trim();
+parts = args.toList(" ");
+subcommand = "";
+if(parts.size() > 0)
+{
+	subcommand = parts.get(0).toLowerCase();
+}
+
+userId = user.get("id");
+userName = ifnull(user.get("first_name"),user.get("name"));
+
+// Fetch user's region preference (default: ap-south-1)
+userRegion = "ap-south-1";
+if(userId != "")
+{
+	prefsQuery = Map();
+	prefsQuery.put("criteria","userid==" + userId);
+	prefsRecords = zoho.cliq.getRecords("awsprefs",prefsQuery);
+	if(prefsRecords != null && prefsRecords.get("status") == "SUCCESS")
+	{
+		prefsList = prefsRecords.get("list");
+		if(prefsList != null && prefsList.size() > 0)
+		{
+			prefs = prefsList.get(0);
+			if(prefs != null)
+			{
+				userRegion = ifnull(prefs.get("region"),"ap-south-1");
+			}
+		}
+	}
+}
+
+// Fetch user's custom backend URL (Option 3: Own Backend)
+API_URL = DEFAULT_API_URL;
+if(userId != "")
+{
+	setupQuery = Map();
+	setupQuery.put("criteria","userid==" + userId);
+	setupRecords = zoho.cliq.getRecords("awssetup",setupQuery);
+	if(setupRecords != null && setupRecords.get("status") == "SUCCESS")
+	{
+		setupList = setupRecords.get("list");
+		if(setupList != null && setupList.size() > 0)
+		{
+			setupRecord = setupList.get(0);
+			customBackendUrl = ifnull(setupRecord.get("backendurl"),"");
+			if(customBackendUrl != null && customBackendUrl != "")
+			{
+				API_URL = customBackendUrl;
+			}
+		}
+	}
+}
+// Verify credentials for all commands except help
+if(subcommand != "help" && subcommand != "?")
+{
+	credCheckBody = Map();
+	credCheckBody.put("service","user_credentials");
+	credCheckBody.put("action","check_exists");
+	credCheckBody.put("userId",userId);
+	try 
+	{
+		credCheckResponse = invokeurl
+		[
+			url :API_URL
+			type :POST
+			parameters:credCheckBody.toString()
+			headers:{"Content-Type":"application/json"}
+			connection:"awscloudcommander"
+		];
+		info "Credential check response: " + credCheckResponse;
+		credCheckData = Map();
+		if(credCheckResponse != null)
+		{
+			credCheckData = ifnull(credCheckResponse.get("data"),Map());
+		}
+		if(credCheckData != null && credCheckData.size() > 0 && ifnull(credCheckData.get("exists"),true) == false)
+		{
+			return {"text":"😒 Please complete your AWS setup first to use this extension.\n\nClick below to get started →","card":{"title":"*Setup Required*","thumbnail":"https://www.monks.com/data/styles/738x363_crop/s3/2024-12/AWS.png?VersionId=AgciRGgmrM5MOD.WFIdw68QeG8kI.JR.&h=c74750f6&itok=q-7iCrYZ","theme":"prompt"},"buttons":{{"label":"Start Setup","action":{"type":"invoke.function","data":{"name":"botTour"}},"key":"setup_info_start"}}};
+		}
+	}
+	catch (e)
+	{
+		info "Credential check error: " + e;
+	}
+}
+
+// Route subcommands
+if(subcommand == "help" || subcommand == "?")
+{
+	helpText = "*☁️ AWS Cloud Commander - Complete Command Reference*\n\n";
+	// Quick Start
+	helpText = helpText + "*🚀 QUICK START*\n";
+	helpText = helpText + "• `/aws` - Open main dashboard with resource overview\n";
+	helpText = helpText + "• `/aws help` - Show this help guide\n";
+	helpText = helpText + "• `/aws status` - Check backend connection health\n\n";
+	// EC2 Commands
+	helpText = helpText + "*🖥️ EC2 INSTANCES*\n";
+	helpText = helpText + "• `/aws ec2` - List all EC2 instances with status\n";
+	helpText = helpText + "• `/aws ec2 <instance-id>` - Get details (use instance ID like `i-0abc123`)\n";
+	helpText = helpText + "• `/aws ec2 start <instance-id>` - Start a stopped instance\n";
+	helpText = helpText + "• `/aws ec2 stop <instance-id>` - Stop a running instance\n";
+	helpText = helpText + "• `/aws ec2 reboot <instance-id>` - Reboot an instance\n";
+	helpText = helpText + "• `/aws ec2 status <instance-id>` - Check instance status\n";
+	helpText = helpText + "• `/aws ec2 metrics <instance-id>` - View CPU, network, disk metrics\n";
+	helpText = helpText + "💡 *Tip:* Use buttons in the list view for easier actions (no need to type IDs)\n";
+	helpText = helpText + "• `/aws ec2 summary` - Overview of all instances by state\n";
+	helpText = helpText + "• `/aws ec2 sg` - List all Security Groups\n";
+	helpText = helpText + "• `/aws ec2 vpcs` - List all VPCs\n\n";
+	// S3 Commands
+	helpText = helpText + "*📦 S3 STORAGE*\n";
+	helpText = helpText + "• `/aws s3` - List all S3 buckets\n";
+	helpText = helpText + "• `/aws s3 create` - Open bucket creation form\n";
+	helpText = helpText + "• `/aws s3 browse <bucket-name>` - Browse bucket contents (e.g., `/aws s3 browse my-bucket`)\n";
+	helpText = helpText + "• `/aws s3 search <bucket-name> <term>` - Search files in bucket (e.g., `/aws s3 search my-bucket report`)\n";
+	helpText = helpText + "• `/aws s3 download <bucket-name> <file-key>` - Get download link (e.g., `/aws s3 download my-bucket data/file.csv`)\n\n";
+	// Lambda Commands
+	helpText = helpText + "*⚡ LAMBDA FUNCTIONS*\n";
+	helpText = helpText + "• `/aws lambda` - List all Lambda functions\n";
+	helpText = helpText + "• `/aws lambda summary` - Overview with runtime stats\n";
+	helpText = helpText + "• `/aws lambda invoke <function-name>` - Invoke a function (requires consent)\n\n";
+	// RDS Commands
+	helpText = helpText + "*🗄️ RDS DATABASES*\n";
+	helpText = helpText + "• `/aws rds` - List all RDS database instances\n";
+	helpText = helpText + "• `/aws rds start <db-id>` - Start a stopped database\n";
+	helpText = helpText + "• `/aws rds stop <db-id>` - Stop a running database\n";
+	helpText = helpText + "• `/aws rds clusters` - List Aurora clusters\n\n";
+	// SNS Commands
+	helpText = helpText + "*📨 SNS MESSAGING*\n";
+	helpText = helpText + "• `/aws sns` - List all SNS topics\n";
+	helpText = helpText + "• `/aws sns topics` - List topics with details\n";
+	helpText = helpText + "• `/aws sns subs` - List all subscriptions\n";
+	helpText = helpText + "• `/aws sns publish <topic-arn>` - Publish message to topic (requires consent)\n\n";
+	// CloudWatch Alarms
+	helpText = helpText + "*🔔 CLOUDWATCH ALARMS*\n";
+	helpText = helpText + "• `/aws alarms` - List all CloudWatch alarms\n";
+	helpText = helpText + "• `/aws alarms active` - Show only alarms in ALARM state\n";
+	helpText = helpText + "• `/aws alarms history` - View alarm state history\n\n";
+	// CloudWatch Logs
+	helpText = helpText + "*📋 CLOUDWATCH LOGS*\n";
+	helpText = helpText + "• `/aws logs` - List all log groups\n";
+	helpText = helpText + "• `/aws logs <log-group>` - View recent logs in a group\n";
+	helpText = helpText + "• `/aws logs <log-group> errors` - Search errors in a group\n";
+	helpText = helpText + "• `/aws logs filter <log-group> <pattern>` - Search with custom pattern\n";
+	helpText = helpText + "• `/aws logs summary` - Logs overview\n\n";
+	// Cost Explorer
+	helpText = helpText + "*💰 COST EXPLORER* (requires consent)\n";
+	helpText = helpText + "• `/aws cost` - View today's costs\n";
+	helpText = helpText + "• `/aws cost today` - Today's spending breakdown\n";
+	helpText = helpText + "• `/aws cost week` - Last 7 days costs\n";
+	helpText = helpText + "• `/aws cost month` - Month-to-date costs\n";
+	helpText = helpText + "• `/aws cost forecast` - Predicted monthly spend\n";
+	helpText = helpText + "• `/aws cost trend` - Cost trends over time\n\n";
+	// IAM Commands
+	helpText = helpText + "*🔐 IAM SECURITY*\n";
+	helpText = helpText + "• `/aws iam` - IAM overview\n";
+	helpText = helpText + "• `/aws iam users` - List IAM users\n";
+	helpText = helpText + "• `/aws iam roles` - List IAM roles\n";
+	helpText = helpText + "• `/aws iam security` - Security recommendations\n\n";
+	// AI Assistant
+	helpText = helpText + "*🤖 AI ASSISTANT* (requires consent)\n";
+	helpText = helpText + "• `/aws ai <question>` - Ask AWS questions (e.g., `/aws ai how do I reduce EC2 costs?`)\n\n";
+	// Settings & Admin
+	helpText = helpText + "*⚙️ SETTINGS & ADMIN*\n";
+	helpText = helpText + "• Settings - Access via Bot Menu (⚙️ icon)\n";
+	helpText = helpText + "• Reset Setup - Access via Bot Menu (🔄 icon)\n";
+	helpText = helpText + "• `/aws consent` - View current consent status for paid APIs\n";
+	helpText = helpText + "• `/aws consent cost` - Toggle Cost Explorer consent\n";
+	helpText = helpText + "• `/aws consent ai` - Toggle AI Assistant consent\n";
+	helpText = helpText + "• `/aws consent lambda` - Toggle Lambda invoke consent\n";
+	helpText = helpText + "• `/aws consent sns` - Toggle SNS publish consent\n";
+	helpText = helpText + "• `/aws permissions` - Check IAM permissions for all services\n\n";
+	// Incidents
+	helpText = helpText + "*🚨 INCIDENTS*\n";
+	helpText = helpText + "• `/aws incidents` - View active incidents\n";
+	helpText = helpText + "• `/aws incidents history` - View incident history\n\n";
+	// Tips
+	helpText = helpText + "*💡 TIPS*\n";
+	helpText = helpText + "• Bucket names are lowercase, no spaces\n";
+	helpText = helpText + "• Use `/aws consent` to enable paid API features\n";
+	helpText = helpText + "• Configure notifications via Bot Menu → Settings";
+	return {"text":helpText,"card":{"theme":"modern-inline"}};
+}
+else if(subcommand == "status" || subcommand == "health")
+{
+	requestBody = Map();
+	requestBody.put("service","health");
+	requestBody.put("userId",userId);
+	response = invokeurl
+	[
+		url :"https://aws-cloudops-906900311.development.catalystserverless.com/server/aws_handler/"
+		type :POST
+		parameters:requestBody.toString()
+		headers:{"Content-Type":"application/json"}
+		connection:"awscloudcommander"
+	];
+	if(response.get("success") == true)
+	{
+		data = response.get("data");
+		statusEmoji = "🔴";
+		if(data.get("status") == "healthy" || data.get("status") == "ok")
+		{
+			statusEmoji = "🟢";
+		}
+		return {"text":"*🔧 System Status*","card":{"theme":"modern-inline"},"slides":{{"type":"label","title":"Backend Health","data":{{"Status":statusEmoji + " " + data.get("status")},{"Service":ifnull(data.get("service"),"aws-cloud-commander")},{"Version":ifnull(data.get("version"),"1.0.0")},{"Region":ifnull(data.get("region"),"ap-south-1")},{"Bedrock Region":ifnull(data.get("bedrockRegion"),"us-east-1")}},"buttons":{{"label":"Refresh","hint":"Check status again","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"health_check"},{"label":"Permissions","hint":"Check IAM permissions","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"permissions_check"}}}}};
+	}
+	else
+	{
+		return {"text":"*Backend unavailable:* " + ifnull(response.get("error"),"Connection failed"),"card":{"theme":"modern-inline"},"buttons":{{"label":"Retry","hint":"Try connecting again","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"health_check"}}};
+	}
+}
+else if(subcommand == "ec2")
+{
+	action = "list";
+	param = "";
+	if(parts.size() > 1)
+	{
+		action = parts.get(1).toLowerCase();
+	}
+	if(parts.size() > 2)
+	{
+		param = parts.get(2);
+	}
+	requestBody = Map();
+	requestBody.put("service","ec2");
+	requestBody.put("userId",userId);
+	requestBody.put("userName",userName);
+	requestBody.put("region",userRegion);
+	// Determine action
+	if(action == "start" && param != "")
+	{
+		requestBody.put("action","start");
+		requestBody.put("instanceId",param);
+	}
+	else if(action == "stop" && param != "")
+	{
+		requestBody.put("action","stop");
+		requestBody.put("instanceId",param);
+	}
+	else if(action == "reboot" && param != "")
+	{
+		requestBody.put("action","reboot");
+		requestBody.put("instanceId",param);
+	}
+	else if(action == "status" && param != "")
+	{
+		// Use "get" action since backend may not have dedicated "status" handler
+		requestBody.put("action","get");
+		requestBody.put("instanceId",param);
+	}
+	else if(action == "metrics" && param != "")
+	{
+		requestBody.put("action","metrics");
+		requestBody.put("instanceId",param);
+	}
+	else if(action == "summary")
+	{
+		requestBody.put("action","summary");
+	}
+	else if(action == "sg" || action == "security" || action == "securitygroups")
+	{
+		requestBody.put("action","securityGroups");
+	}
+	else if(action == "vpcs" || action == "vpc")
+	{
+		requestBody.put("action","vpcs");
+	}
+	else if(action.startsWith("i-"))
+	{
+		requestBody.put("action","get");
+		requestBody.put("instanceId",action);
+	}
+	else
+	{
+		requestBody.put("action","list");
+	}
+	// Extract pagination parameters
+	page = ifnull(requestBody.get("page"),1);
+	limit = ifnull(requestBody.get("limit"),5);
+	requestBody.put("page",page);
+	requestBody.put("limit",limit);
+	response = invokeurl
+	[
+		url :"https://aws-cloudops-906900311.development.catalystserverless.com/server/aws_handler/"
+		type :POST
+		parameters:requestBody.toString()
+		headers:{"Content-Type":"application/json"}
+		connection:"awscloudcommander"
+	];
+	if(response.get("success") == true)
+	{
+		data = response.get("data");
+		apiAction = requestBody.get("action");
+		// Handle START action response
+		if(apiAction == "start")
+		{
+			// Send notification using dynamic notification system
+			notifMsg = Map();
+			notifMsg.put("text","▶️ *EC2 Instance Started*\n\n👤 *By:* " + userName + "\n🖥️ *Instance:* `" + param + "`\n⏰ *Time:* " + zoho.currenttime.toString("dd MMM yyyy HH:mm"));
+			notifMsg.put("card",{"theme":"modern-inline"});
+			// Get notification channel for EC2
+			channelName = "";
+			notifQuery = Map();
+			notifQuery.put("criteria","userid==" + userId.toString());
+			allUserRecords = zoho.cliq.getRecords("awsnotifications",notifQuery);
+			if(allUserRecords != null && allUserRecords.get("status") == "SUCCESS")
+			{
+				notifList = allUserRecords.get("list");
+				if(notifList != null && notifList.size() > 0)
+				{
+					for each  notifRecord in notifList
+					{
+						if(notifRecord != null && ifnull(notifRecord.get("userid"),"").toString() == userId.toString() && ifnull(notifRecord.get("notificationtype"),"") == "ec2")
+						{
+							enabledVal = notifRecord.get("enabled");
+							if(enabledVal == "TRUE" || enabledVal == true || enabledVal == "true" || enabledVal == 1 || enabledVal == "1")
+							{
+								channelRaw = ifnull(notifRecord.get("channel"),"");
+								if(channelRaw != null && channelRaw != "")
+								{
+									// Extract channel name (handles object, JSON string, or plain string)
+									try
+									{
+										if(channelRaw.get("unique_name") != null)
+										{
+											channelName = channelRaw.get("unique_name").toString();
+										}
+										else if(channelRaw.get("name") != null)
+										{
+											channelName = channelRaw.get("name").toString();
+										}
+									}
+									catch(e)
+									{
+										channelName = channelRaw.toString();
+									}
+									if(channelName == "")
+									{
+										channelName = channelRaw.toString();
+									}
+									// Remove # prefix and handle JSON strings
+									if(channelName.startsWith("{"))
+									{
+										if(channelName.contains("\"unique_name\""))
+										{
+											startIdx = channelName.indexOf("\"unique_name\"");
+											valueStart = channelName.indexOf("\"", startIdx + 13) + 1;
+											valueEnd = channelName.indexOf("\"", valueStart);
+											if(valueStart > 0 && valueEnd > valueStart)
+											{
+												channelName = channelName.subString(valueStart, valueEnd);
+											}
+										}
+									}
+									if(channelName.startsWith("#"))
+									{
+										channelName = channelName.subString(1);
+									}
+									break;
+								}
+							}
+						}
+					}
+				}
+			}
+			// Fallback to old system
+			if(channelName == "")
+			{
+				scheduleQuery = Map();
+				scheduleQuery.put("criteria","userid==" + userId);
+				scheduleRecords = zoho.cliq.getRecords("awsschedule",scheduleQuery);
+				if(scheduleRecords != null && scheduleRecords.get("status") == "SUCCESS")
+				{
+					scheduleList = scheduleRecords.get("list");
+					if(scheduleList != null && scheduleList.size() > 0)
+					{
+						schedule = scheduleList.get(0);
+						alertsVal = schedule.get("alertsenabled");
+						if(alertsVal == "TRUE" || alertsVal == true || alertsVal == "true" || alertsVal == 1 || alertsVal == "1")
+						{
+							prefsQuery = Map();
+							prefsQuery.put("criteria","userid==" + userId);
+							prefsRecords = zoho.cliq.getRecords("awsprefs",prefsQuery);
+							if(prefsRecords != null && prefsRecords.get("status") == "SUCCESS")
+							{
+								prefsList = prefsRecords.get("list");
+								if(prefsList != null && prefsList.size() > 0)
+								{
+									channelName = ifnull(prefsList.get(0).get("channel"),"");
+									if(channelName.startsWith("#"))
+									{
+										channelName = channelName.subString(1);
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			// Send notification
+			if(channelName != "" && channelName != null)
+			{
+				zoho.cliq.postToChannelAsBot(channelName,"awscloudcommander",notifMsg);
+			}
+			return {"text":"▶️ *Starting instance* `" + param + "`\n\n⏳ Instance will be running in 1-2 minutes.","card":{"theme":"modern-inline"},"buttons":{{"label":"Check Status","hint":"View current instance state","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ec2_status_" + param},{"label":"List All","hint":"View all EC2 instances","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ec2_refresh"}}};
+		}
+		// Handle STOP action response
+		else if(apiAction == "stop")
+		{
+			// Send notification using dynamic notification system
+			notifMsg = Map();
+			notifMsg.put("text","⏹️ *EC2 Instance Stopped*\n\n👤 *By:* " + userName + "\n🖥️ *Instance:* `" + param + "`\n⏰ *Time:* " + zoho.currenttime.toString("dd MMM yyyy HH:mm"));
+			notifMsg.put("card",{"theme":"modern-inline"});
+			// Get notification channel for EC2
+			channelName = "";
+			notifQuery = Map();
+			notifQuery.put("criteria","userid==" + userId.toString());
+			allUserRecords = zoho.cliq.getRecords("awsnotifications",notifQuery);
+			if(allUserRecords != null && allUserRecords.get("status") == "SUCCESS")
+			{
+				notifList = allUserRecords.get("list");
+				if(notifList != null && notifList.size() > 0)
+				{
+					for each  notifRecord in notifList
+					{
+						if(notifRecord != null && ifnull(notifRecord.get("userid"),"").toString() == userId.toString() && ifnull(notifRecord.get("notificationtype"),"") == "ec2")
+						{
+							enabledVal = notifRecord.get("enabled");
+							if(enabledVal == "TRUE" || enabledVal == true || enabledVal == "true" || enabledVal == 1 || enabledVal == "1")
+							{
+								channelRaw = ifnull(notifRecord.get("channel"),"");
+								if(channelRaw != null && channelRaw != "")
+								{
+									// Extract channel name (handles object, JSON string, or plain string)
+									try
+									{
+										if(channelRaw.get("unique_name") != null)
+										{
+											channelName = channelRaw.get("unique_name").toString();
+										}
+										else if(channelRaw.get("name") != null)
+										{
+											channelName = channelRaw.get("name").toString();
+										}
+									}
+									catch(e)
+									{
+										channelName = channelRaw.toString();
+									}
+									if(channelName == "")
+									{
+										channelName = channelRaw.toString();
+									}
+									// Remove # prefix and handle JSON strings
+									if(channelName.startsWith("{"))
+									{
+										if(channelName.contains("\"unique_name\""))
+										{
+											startIdx = channelName.indexOf("\"unique_name\"");
+											valueStart = channelName.indexOf("\"", startIdx + 13) + 1;
+											valueEnd = channelName.indexOf("\"", valueStart);
+											if(valueStart > 0 && valueEnd > valueStart)
+											{
+												channelName = channelName.subString(valueStart, valueEnd);
+											}
+										}
+									}
+									if(channelName.startsWith("#"))
+									{
+										channelName = channelName.subString(1);
+									}
+									break;
+								}
+							}
+						}
+					}
+				}
+			}
+			// Fallback to old system
+			if(channelName == "")
+			{
+				scheduleQuery = Map();
+				scheduleQuery.put("criteria","userid==" + userId);
+				scheduleRecords = zoho.cliq.getRecords("awsschedule",scheduleQuery);
+				if(scheduleRecords != null && scheduleRecords.get("status") == "SUCCESS")
+				{
+					scheduleList = scheduleRecords.get("list");
+					if(scheduleList != null && scheduleList.size() > 0)
+					{
+						schedule = scheduleList.get(0);
+						alertsVal = schedule.get("alertsenabled");
+						if(alertsVal == "TRUE" || alertsVal == true || alertsVal == "true" || alertsVal == 1 || alertsVal == "1")
+						{
+							prefsQuery = Map();
+							prefsQuery.put("criteria","userid==" + userId);
+							prefsRecords = zoho.cliq.getRecords("awsprefs",prefsQuery);
+							if(prefsRecords != null && prefsRecords.get("status") == "SUCCESS")
+							{
+								prefsList = prefsRecords.get("list");
+								if(prefsList != null && prefsList.size() > 0)
+								{
+									channelName = ifnull(prefsList.get(0).get("channel"),"");
+									if(channelName.startsWith("#"))
+									{
+										channelName = channelName.subString(1);
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			// Send notification
+			if(channelName != "" && channelName != null)
+			{
+				zoho.cliq.postToChannelAsBot(channelName,"awscloudcommander",notifMsg);
+			}
+			return {"text":"⏹️ *Stopping instance* `" + param + "`\n\n⏳ Instance will be stopped shortly.","card":{"theme":"modern-inline"},"buttons":{{"label":"Check Status","hint":"View current instance state","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ec2_status_" + param},{"label":"List All","hint":"View all EC2 instances","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ec2_refresh"}}};
+		}
+		// Handle REBOOT action response
+		else if(apiAction == "reboot")
+		{
+			// Send notification using dynamic notification system
+			notifMsg = Map();
+			notifMsg.put("text","🔄 *EC2 Instance Rebooted*\n\n👤 *By:* " + userName + "\n🖥️ *Instance:* `" + param + "`\n⏰ *Time:* " + zoho.currenttime.toString("dd MMM yyyy HH:mm"));
+			notifMsg.put("card",{"theme":"modern-inline"});
+			// Get notification channel for EC2
+			channelName = "";
+			notifQuery = Map();
+			notifQuery.put("criteria","userid==" + userId.toString());
+			allUserRecords = zoho.cliq.getRecords("awsnotifications",notifQuery);
+			if(allUserRecords != null && allUserRecords.get("status") == "SUCCESS")
+			{
+				notifList = allUserRecords.get("list");
+				if(notifList != null && notifList.size() > 0)
+				{
+					for each  notifRecord in notifList
+					{
+						if(notifRecord != null && ifnull(notifRecord.get("userid"),"").toString() == userId.toString() && ifnull(notifRecord.get("notificationtype"),"") == "ec2")
+						{
+							enabledVal = notifRecord.get("enabled");
+							if(enabledVal == "TRUE" || enabledVal == true || enabledVal == "true" || enabledVal == 1 || enabledVal == "1")
+							{
+								channelRaw = ifnull(notifRecord.get("channel"),"");
+								if(channelRaw != null && channelRaw != "")
+								{
+									// Extract channel name (handles object, JSON string, or plain string)
+									try
+									{
+										if(channelRaw.get("unique_name") != null)
+										{
+											channelName = channelRaw.get("unique_name").toString();
+										}
+										else if(channelRaw.get("name") != null)
+										{
+											channelName = channelRaw.get("name").toString();
+										}
+									}
+									catch(e)
+									{
+										channelName = channelRaw.toString();
+									}
+									if(channelName == "")
+									{
+										channelName = channelRaw.toString();
+									}
+									// Remove # prefix and handle JSON strings
+									if(channelName.startsWith("{"))
+									{
+										if(channelName.contains("\"unique_name\""))
+										{
+											startIdx = channelName.indexOf("\"unique_name\"");
+											valueStart = channelName.indexOf("\"", startIdx + 13) + 1;
+											valueEnd = channelName.indexOf("\"", valueStart);
+											if(valueStart > 0 && valueEnd > valueStart)
+											{
+												channelName = channelName.subString(valueStart, valueEnd);
+											}
+										}
+									}
+									if(channelName.startsWith("#"))
+									{
+										channelName = channelName.subString(1);
+									}
+									break;
+								}
+							}
+						}
+					}
+				}
+			}
+			// Fallback to old system
+			if(channelName == "")
+			{
+				scheduleQuery = Map();
+				scheduleQuery.put("criteria","userid==" + userId);
+				scheduleRecords = zoho.cliq.getRecords("awsschedule",scheduleQuery);
+				if(scheduleRecords != null && scheduleRecords.get("status") == "SUCCESS")
+				{
+					scheduleList = scheduleRecords.get("list");
+					if(scheduleList != null && scheduleList.size() > 0)
+					{
+						schedule = scheduleList.get(0);
+						alertsVal = schedule.get("alertsenabled");
+						if(alertsVal == "TRUE" || alertsVal == true || alertsVal == "true" || alertsVal == 1 || alertsVal == "1")
+						{
+							prefsQuery = Map();
+							prefsQuery.put("criteria","userid==" + userId);
+							prefsRecords = zoho.cliq.getRecords("awsprefs",prefsQuery);
+							if(prefsRecords != null && prefsRecords.get("status") == "SUCCESS")
+							{
+								prefsList = prefsRecords.get("list");
+								if(prefsList != null && prefsList.size() > 0)
+								{
+									channelName = ifnull(prefsList.get(0).get("channel"),"");
+									if(channelName.startsWith("#"))
+									{
+										channelName = channelName.subString(1);
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			// Send notification
+			if(channelName != "" && channelName != null)
+			{
+				zoho.cliq.postToChannelAsBot(channelName,"awscloudcommander",notifMsg);
+			}
+			return {"text":"🔄 *Rebooting instance* `" + param + "`\n\n⏳ Instance will restart in a moment.","card":{"theme":"modern-inline"},"buttons":{{"label":"Check Status","hint":"View current instance state","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ec2_status_" + param},{"label":"List All","hint":"View all EC2 instances","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ec2_refresh"}}};
+		}
+		// Handle LIST action - MAIN IMPROVED TABLE WITH INLINE BUTTONS
+		else if(apiAction == "list")
+		{
+			// Extract instances array and pagination metadata
+			instances = ifnull(data.get("instances"),data);
+			pagination = ifnull(data.get("pagination"),Map());
+			currentPage = ifnull(pagination.get("currentPage"),1);
+			totalPages = ifnull(pagination.get("totalPages"),1);
+			totalItems = ifnull(pagination.get("totalItems"),instances.size());
+			hasPrev = ifnull(pagination.get("hasPrev"),false);
+			hasNext = ifnull(pagination.get("hasNext"),false);
+			
+			if(instances.size() == 0)
+			{
+				return {"text":"📭 *No EC2 instances found in this region.*\n\nTry checking a different region in settings.","card":{"title":"🖥️ EC2 Instances","theme":"modern-inline"}};
+			}
+			// Build table rows with INLINE ACTION BUTTONS
+			rows = List();
+			runningCount = 0;
+			stoppedCount = 0;
+			for each  instance in instances
+			{
+				state = ifnull(instance.get("state"),"unknown");
+				instanceId = ifnull(instance.get("id"),"");
+				instanceName = ifnull(instance.get("name"),"Unnamed");
+				instanceType = ifnull(instance.get("type"),"");
+				// Count states
+				if(state == "running")
+				{
+					runningCount = runningCount + 1;
+				}
+				else if(state == "stopped")
+				{
+					stoppedCount = stoppedCount + 1;
+				}
+				// Build state display with emoji
+				stateDisplay = "";
+				if(state == "running")
+				{
+					stateDisplay = "🟢 Running";
+				}
+				else if(state == "stopped")
+				{
+					stateDisplay = "🔴 Stopped";
+				}
+				else if(state == "pending")
+				{
+					stateDisplay = "🟡 Pending";
+				}
+				else if(state == "stopping")
+				{
+					stateDisplay = "🟠 Stopping";
+				}
+				else
+				{
+					stateDisplay = "⚪ " + state;
+				}
+				// Build INLINE ACTION BUTTON based on state
+				// Syntax: [+Label](invoke.function|functionName|ownerEmail|key)
+				// Using [-Label] for destructive actions (stop), [+Label] for positive (start)
+				actionButton = "";
+				if(state == "running")
+				{
+					// Stop button (red/destructive style with -)
+					actionButton = "[-⏹ Stop](invoke.function|handleButton||ec2_stop_" + instanceId + ")";
+				}
+				else if(state == "stopped")
+				{
+					// Start button (green/positive style with +)
+					actionButton = "[+▶️ Start](invoke.function|handleButton||ec2_start_" + instanceId + ")";
+				}
+				else if(state == "pending" || state == "stopping")
+				{
+					// Show status check for transitioning states
+					actionButton = "[+🔄 Check](invoke.function|handleButton||ec2_status_" + instanceId + ")";
+				}
+				else
+				{
+					actionButton = "—";
+				}
+				// Add info button to view details
+				infoButton = "[+ℹ️](invoke.function|handleButton||ec2_info_" + instanceId + ")";
+				row = Map();
+				instanceDisplay = "*" + instanceName + "*";
+				if(instanceType != "")
+				{
+					instanceDisplay = instanceDisplay + " (" + instanceType + ")";
+				}
+				row.put("Instance",instanceDisplay);
+				row.put("Type",instanceType);
+				row.put("State",stateDisplay);
+				row.put("Action",actionButton);
+				row.put("Info",infoButton);
+				rows.add(row);
+			}
+			// Summary text with pagination info
+			pageText = "";
+			if(totalPages > 1)
+			{
+				pageText = " (Page " + currentPage + " of " + totalPages + ")";
+			}
+			summaryText = "*🖥️ EC2 Instances* (" + totalItems + " total" + pageText + ")";
+			
+			// Build buttons with pagination FIRST
+			buttons = List();
+			baseKey = "ec2_list";
+			if(totalPages > 1)
+			{
+				if(hasPrev)
+				{
+					buttons.add({"label":"⬅️ Previous","hint":"Go to previous page","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey + "|page|" + (currentPage - 1)});
+				}
+				if(hasNext)
+				{
+					buttons.add({"label":"Next ➡️","hint":"Go to next page","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey + "|page|" + (currentPage + 1)});
+				}
+			}
+			// Add other action buttons after pagination
+			buttons.add({"label":"🔄 Refresh","hint":"Reload instance list","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ec2_refresh"});
+			buttons.add({"label":"🔐 Security Groups","hint":"View security groups","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ec2_sg"});
+			
+			return {"text":summaryText,"card":{"theme":"modern-inline"},"slides":{{"type":"label","title":"Instance Summary","data":{{"🟢 Running":runningCount},{"🔴 Stopped":stoppedCount},{"📊 Total":totalItems}}},{"type":"table","title":"All Instances","data":{"headers":{"Instance","Type","State","Action","Info"},"rows":rows}}},"buttons":buttons};
+		}
+		// Handle GET (single instance details)
+		else if(apiAction == "get")
+		{
+			instance = data;
+			instanceId = ifnull(instance.get("id"),"");
+			instanceName = ifnull(instance.get("name"),"Instance");
+			state = ifnull(instance.get("state"),"unknown");
+			// State emoji
+			stateEmoji = "⚪";
+			if(state == "running")
+			{
+				stateEmoji = "🟢";
+			}
+			else if(state == "stopped")
+			{
+				stateEmoji = "🔴";
+			}
+			else if(state == "pending")
+			{
+				stateEmoji = "🟡";
+			}
+			else if(state == "stopping")
+			{
+				stateEmoji = "🟠";
+			}
+			// Build action buttons based on state with hints
+			actionButtons = List();
+			if(state == "running")
+			{
+				actionButtons.add({"label":"Stop","hint":"Stop this instance","type":"-","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ec2_stop_" + instanceId});
+				actionButtons.add({"label":"Reboot","hint":"Restart this instance","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ec2_reboot_" + instanceId});
+			}
+			else if(state == "stopped")
+			{
+				actionButtons.add({"label":"Start","hint":"Start this instance","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ec2_start_" + instanceId});
+			}
+			// Always add refresh button
+			actionButtons.add({"label":"Refresh","hint":"Reload instance details","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ec2_info_" + instanceId});
+			actionButtons.add({"label":"List All","hint":"View all instances","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ec2_refresh"});
+			// Format launch time
+			launchTimeFormatted = "—";
+			launchTimeRaw = instance.get("launchTime");
+			if(launchTimeRaw != null && launchTimeRaw != "")
+			{
+				try
+				{
+					launchTimeStr = launchTimeRaw.toString();
+					// If it's an ISO string (e.g., "2025-12-08T13:50:58.000Z")
+					if(launchTimeStr.contains("T"))
+					{
+						// Extract date and time parts manually
+						datePart = launchTimeStr.subString(0, launchTimeStr.indexOf("T"));
+						timePart = launchTimeStr.subString(launchTimeStr.indexOf("T") + 1);
+						// Remove milliseconds (everything after ".") and timezone ("Z")
+						if(timePart.contains("."))
+						{
+							timePart = timePart.subString(0, timePart.indexOf("."));
+						}
+						// Remove Z if present (should be removed by above, but double-check)
+						if(timePart.contains("Z"))
+						{
+							zIndex = timePart.indexOf("Z");
+							timePart = timePart.subString(0, zIndex);
+						}
+						// Parse date parts: YYYY-MM-DD
+						dateParts = datePart.toList("-");
+						if(dateParts.size() == 3)
+						{
+							year = dateParts.get(0);
+							day = dateParts.get(2);
+							monthNum = dateParts.get(1);
+							// Parse time parts: HH:mm:ss
+							timeParts = timePart.toList(":");
+							hour = "00";
+							minute = "00";
+							if(timeParts.size() >= 2)
+							{
+								hour = timeParts.get(0);
+								minute = timeParts.get(1);
+							}
+							// Format month name
+							monthNames = {"01":"Jan","02":"Feb","03":"Mar","04":"Apr","05":"May","06":"Jun","07":"Jul","08":"Aug","09":"Sep","10":"Oct","11":"Nov","12":"Dec"};
+							monthName = ifnull(monthNames.get(monthNum),"Dec");
+							// Build formatted string: "08 Dec 2025, 13:50"
+							launchTimeFormatted = day + " " + monthName + " " + year + ", " + hour + ":" + minute;
+						}
+					}
+					else
+					{
+						// Try toDate() as fallback
+						launchDate = launchTimeRaw.toDate();
+						if(launchDate != null)
+						{
+							launchTimeFormatted = launchDate.toString("dd MMM yyyy") + ", " + launchDate.toString("HH:mm");
+						}
+					}
+				}
+				catch(e)
+				{
+					launchTimeFormatted = launchTimeRaw.toString();
+				}
+			}
+			// Format instance type (already human-readable, but ensure it's displayed nicely)
+			instanceTypeDisplay = ifnull(instance.get("type"),"—");
+			return {"text":"*🖥️ " + instanceName + "*","card":{"theme":"modern-inline"},"slides":{{"type":"label","title":"Instance Details","data":{{"State":stateEmoji + " " + state},{"Type":instanceTypeDisplay},{"Public IP":ifnull(instance.get("publicIp"),"—")},{"Private IP":ifnull(instance.get("privateIp"),"—")},{"Availability Zone":ifnull(instance.get("az"),"—")},{"Launch Time":launchTimeFormatted}}}},"buttons":actionButtons};
+		}
+		// Handle SUMMARY
+		else if(apiAction == "summary")
+		{
+			// Safe nested map access
+			byState = ifnull(data.get("byState"),Map());
+			running = ifnull(byState.get("running"),0);
+			stopped = ifnull(byState.get("stopped"),0);
+			pending = ifnull(byState.get("pending"),0);
+			total = ifnull(data.get("total"),0);
+			return {"text":"*🖥️ EC2 Summary*","card":{"theme":"modern-inline"},"slides":{{"type":"label","title":"Instance Overview","data":{{"📊 Total Instances":total},{"🟢 Running":running},{"🔴 Stopped":stopped},{"🟡 Pending":pending}}}},"buttons":{{"label":"View All","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ec2_refresh"}}};
+		}
+		// Handle STATUS check
+		else if(apiAction == "status")
+		{
+			instance = data;
+			instanceId = ifnull(instance.get("id"),ifnull(instance.get("instanceId"),param));
+			instanceName = ifnull(instance.get("name"),"Instance");
+			state = ifnull(instance.get("state"),ifnull(instance.get("status"),"unknown"));
+			stateEmoji = "⚪";
+			if(state == "running")
+			{
+				stateEmoji = "🟢";
+			}
+			else if(state == "stopped")
+			{
+				stateEmoji = "🔴";
+			}
+			else if(state == "pending")
+			{
+				stateEmoji = "🟡";
+			}
+			else if(state == "stopping")
+			{
+				stateEmoji = "🟠";
+			}
+			return {"text":"*Instance Status: " + instanceName + "*\n\n" + stateEmoji + " *" + state + "*","card":{"theme":"modern-inline"},"buttons":{{"label":"Refresh","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ec2_status_" + instanceId},{"label":"Details","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ec2_info_" + instanceId}}};
+		}
+		// Handle METRICS
+		else if(apiAction == "metrics")
+		{
+			instanceId = ifnull(data.get("instanceId"),param);
+			instanceName = ifnull(data.get("name"),ifnull(data.get("instanceName"),"Instance"));
+			metricsText = "*📊 EC2 Instance Metrics*\n\n";
+			metricsText = metricsText + "*Instance:* " + instanceName + "\n\n";
+			hasMetrics = false;
+			// CPU metrics - try multiple formats
+			cpu = data.get("cpu");
+			cpuAvg = data.get("cpuAverage");
+			cpuMax = data.get("cpuMax");
+			if(cpu != null)
+			{
+				hasMetrics = true;
+				metricsText = metricsText + "*CPU Utilization:*\n";
+				metricsText = metricsText + "• Average: " + ifnull(cpu.get("average"),ifnull(cpu.get("avg"),"—")) + "%\n";
+				metricsText = metricsText + "• Max: " + ifnull(cpu.get("max"),ifnull(cpu.get("maximum"),"—")) + "%\n";
+				metricsText = metricsText + "• Min: " + ifnull(cpu.get("min"),ifnull(cpu.get("minimum"),"—")) + "%\n\n";
+			}
+			else if(cpuAvg != null)
+			{
+				hasMetrics = true;
+				metricsText = metricsText + "*CPU Utilization:*\n";
+				metricsText = metricsText + "• Average: " + cpuAvg + "%\n";
+				if(cpuMax != null)
+				{
+					metricsText = metricsText + "• Max: " + cpuMax + "%\n";
+				}
+				metricsText = metricsText + "\n";
+			}
+			// Network metrics - try multiple formats
+			networkIn = data.get("networkIn");
+			networkOut = data.get("networkOut");
+			netIn = data.get("NetworkIn");
+			netOut = data.get("NetworkOut");
+			if(networkIn != null || networkOut != null)
+			{
+				hasMetrics = true;
+				metricsText = metricsText + "*Network:*\n";
+				if(networkIn != null)
+				{
+					inVal = networkIn + "";
+					inTotal = ifnull(networkIn.get("total"),null);
+					if(inTotal != null)
+					{
+						inVal = inTotal + "";
+					}
+					metricsText = metricsText + "• In: " + inVal + " bytes\n";
+				}
+				if(networkOut != null)
+				{
+					outVal = networkOut + "";
+					outTotal = ifnull(networkOut.get("total"),null);
+					if(outTotal != null)
+					{
+						outVal = outTotal + "";
+					}
+					metricsText = metricsText + "• Out: " + outVal + " bytes\n";
+				}
+				metricsText = metricsText + "\n";
+			}
+			else if(netIn != null || netOut != null)
+			{
+				hasMetrics = true;
+				metricsText = metricsText + "*Network:*\n";
+				if(netIn != null)
+				{
+					metricsText = metricsText + "• In: " + netIn + " bytes\n";
+				}
+				if(netOut != null)
+				{
+					metricsText = metricsText + "• Out: " + netOut + " bytes\n";
+				}
+				metricsText = metricsText + "\n";
+			}
+			// Disk metrics
+			diskRead = data.get("diskRead");
+			diskWrite = data.get("diskWrite");
+			if(diskRead != null || diskWrite != null)
+			{
+				hasMetrics = true;
+				metricsText = metricsText + "*Disk I/O:*\n";
+				if(diskRead != null)
+				{
+					readVal = diskRead + "";
+					readTotal = ifnull(diskRead.get("total"),null);
+					if(readTotal != null)
+					{
+						readVal = readTotal + "";
+					}
+					metricsText = metricsText + "• Read: " + readVal + " ops\n";
+				}
+				if(diskWrite != null)
+				{
+					writeVal = diskWrite + "";
+					writeTotal = ifnull(diskWrite.get("total"),null);
+					if(writeTotal != null)
+					{
+						writeVal = writeTotal + "";
+					}
+					metricsText = metricsText + "• Write: " + writeVal + " ops\n";
+				}
+				metricsText = metricsText + "\n";
+			}
+			// Check if we have any metrics data
+			if(hasMetrics == false)
+			{
+				// Check if data has any useful keys
+				metricsText = metricsText + "_No metrics data available._\n\n";
+				metricsText = metricsText + "This could mean:\n";
+				metricsText = metricsText + "• Instance is stopped\n";
+				metricsText = metricsText + "• CloudWatch not enabled\n";
+				metricsText = metricsText + "• No recent activity\n";
+			}
+			metricsText = metricsText + "\n_CloudWatch metrics (last 1 hour)_";
+			return {"text":metricsText,"card":{"theme":"modern-inline"}};
+		}
+		// Handle SECURITY GROUPS
+		else if(apiAction == "securityGroups")
+		{
+			// Extract security groups array and pagination metadata
+			sgList = ifnull(data.get("securityGroups"),data);
+			pagination = ifnull(data.get("pagination"),Map());
+			currentPage = ifnull(pagination.get("currentPage"),1);
+			totalPages = ifnull(pagination.get("totalPages"),1);
+			totalItems = ifnull(pagination.get("totalItems"),sgList.size());
+			hasPrev = ifnull(pagination.get("hasPrev"),false);
+			hasNext = ifnull(pagination.get("hasNext"),false);
+			
+			if(sgList == null || sgList.size() == 0)
+			{
+				return {"text":"*🔐 Security Groups*\n\nNo security groups found.","card":{"theme":"modern-inline"}};
+			}
+			pageText = "";
+			if(totalPages > 1)
+			{
+				pageText = " (Page " + currentPage + " of " + totalPages + ")";
+			}
+			sgText = "*🔐 Security Groups*\n\n";
+			sgText = sgText + "Found " + totalItems + " security group(s)" + pageText + ":\n\n";
+			for each  sg in sgList
+			{
+				sgName = ifnull(sg.get("name"),ifnull(sg.get("groupName"),"—"));
+				sgDesc = ifnull(sg.get("description"),"—");
+				sgVpc = ifnull(sg.get("vpcId"),"—");
+				sgText = sgText + "*" + sgName + "*\n";
+				sgText = sgText + "• VPC: `" + sgVpc + "`\n";
+				sgText = sgText + "• Description: " + sgDesc + "\n\n";
+			}
+			
+			// Build buttons with pagination FIRST
+			buttons = List();
+			baseKey = "ec2_sg";
+			if(totalPages > 1)
+			{
+				if(hasPrev)
+				{
+					buttons.add({"label":"⬅️ Previous","hint":"Go to previous page","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey + "|page|" + (currentPage - 1)});
+				}
+				if(hasNext)
+				{
+					buttons.add({"label":"Next ➡️","hint":"Go to next page","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey + "|page|" + (currentPage + 1)});
+				}
+			}
+			buttons.add({"label":"🔄 Refresh","hint":"Reload security groups","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ec2_sg"});
+			
+			return {"text":sgText,"card":{"theme":"modern-inline"},"buttons":buttons};
+		}
+		// Handle VPCS
+		else if(apiAction == "vpcs")
+		{
+			// Extract VPCs array and pagination metadata
+			vpcList = ifnull(data.get("vpcs"),data);
+			pagination = ifnull(data.get("pagination"),Map());
+			currentPage = ifnull(pagination.get("currentPage"),1);
+			totalPages = ifnull(pagination.get("totalPages"),1);
+			totalItems = ifnull(pagination.get("totalItems"),vpcList.size());
+			hasPrev = ifnull(pagination.get("hasPrev"),false);
+			hasNext = ifnull(pagination.get("hasNext"),false);
+			
+			if(vpcList == null || vpcList.size() == 0)
+			{
+				return {"text":"*🌐 VPCs*\n\nNo VPCs found.","card":{"theme":"modern-inline"}};
+			}
+			pageText = "";
+			if(totalPages > 1)
+			{
+				pageText = " (Page " + currentPage + " of " + totalPages + ")";
+			}
+			vpcText = "*🌐 Virtual Private Clouds (VPCs)*\n\n";
+			vpcText = vpcText + "Found " + totalItems + " VPC(s)" + pageText + ":\n\n";
+			for each  vpc in vpcList
+			{
+				vpcCidr = ifnull(vpc.get("cidr"),ifnull(vpc.get("cidrBlock"),"—"));
+				vpcState = ifnull(vpc.get("state"),"—");
+				vpcDefault = ifnull(vpc.get("isDefault"),false);
+				vpcName = ifnull(vpc.get("name"),"");
+				if(vpcName != "")
+				{
+					vpcText = vpcText + "*" + vpcName + "*\n";
+				}
+				else
+				{
+					vpcText = vpcText + "*VPC*\n";
+				}
+				vpcText = vpcText + "• CIDR: " + vpcCidr + "\n";
+				vpcText = vpcText + "• State: " + vpcState + "\n";
+				if(vpcDefault == true || vpcDefault == "true")
+				{
+					vpcText = vpcText + "• _Default VPC_\n";
+				}
+				vpcText = vpcText + "\n";
+			}
+			
+			// Build buttons with pagination FIRST
+			buttons = List();
+			baseKey = "ec2_vpcs";
+			if(totalPages > 1)
+			{
+				if(hasPrev)
+				{
+					buttons.add({"label":"⬅️ Previous","hint":"Go to previous page","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey + "|page|" + (currentPage - 1)});
+				}
+				if(hasNext)
+				{
+					buttons.add({"label":"Next ➡️","hint":"Go to next page","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey + "|page|" + (currentPage + 1)});
+				}
+			}
+			buttons.add({"label":"🔄 Refresh","hint":"Reload VPCs","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ec2_vpcs"});
+			
+			return {"text":vpcText,"card":{"theme":"modern-inline"},"buttons":buttons};
+		}
+		else
+		{
+			return {"text":"✅ *EC2 action completed.*"};
+		}
+	}
+	else
+	{
+		errorMsg = ifnull(response.get("error"),"Unknown error");
+		return {"text":"🖥️ *EC2 Error*\n\n" + errorMsg,"card":{"title":"🖥️ EC2 Error","theme":"prompt"},"buttons":{{"label":"🔄 Try Again","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ec2_refresh"}}};
+	}
+}
+else if(subcommand == "s3")
+{
+	action = "list";
+	param = "";
+	if(parts.size() > 1)
+	{
+		action = parts.get(1).toLowerCase();
+	}
+	if(parts.size() > 2)
+	{
+		param = parts.get(2);
+	}
+	requestBody = Map();
+	requestBody.put("service","s3");
+	requestBody.put("userId",userId);
+	requestBody.put("region",userRegion);
+	if(action == "summary")
+	{
+		requestBody.put("action","summary");
+	}
+	else if(action == "info" && param != "")
+	{
+		requestBody.put("action","getBucket");
+		requestBody.put("bucket",param);
+	}
+	else if(action == "search" && param != "")
+	{
+		searchTerm = ifnull(parts.get(3),"");
+		if(searchTerm == "")
+		{
+			return {"text":"*📦 S3 Search*\n\n❌ Please provide a search term.\n\nUsage: `/aws s3 search <bucket> <term>`","card":{"theme":"modern-inline"}};
+		}
+		requestBody.put("action","search");
+		requestBody.put("bucket",param);
+		requestBody.put("searchTerm",searchTerm);
+	}
+	else if(action == "object" && param != "")
+	{
+		// Get object info/metadata
+		key = ifnull(parts.get(3),"");
+		if(key == "")
+		{
+			return {"text":"*📦 S3 Object Info*\n\n❌ Please provide an object key.\n\nUsage: `/aws s3 object <bucket> <key>`","card":{"theme":"modern-inline"}};
+		}
+		requestBody.put("action","getObject");
+		requestBody.put("bucket",param);
+		requestBody.put("key",key);
+	}
+	else if(action == "delete" && param != "")
+	{
+		// Delete object - requires confirmation each time
+		key = ifnull(parts.get(3),"");
+		if(key == "")
+		{
+			return {"text":"*📦 S3 Delete*\n\n❌ Please provide an object key.\n\nUsage: `/aws s3 delete <bucket> <key>`","card":{"theme":"modern-inline"}};
+		}
+		// Show confirmation prompt instead of deleting directly
+		return {"text":"*🗑️ Delete Confirmation*\n\nAre you sure you want to delete this object?\n\n📦 Bucket: `" + param + "`\n📄 Key: `" + key + "`\n\n⚠️ *This action cannot be undone!*","card":{"theme":"prompt"},"buttons":{{"label":"🗑️ Delete","hint":"Permanently delete this object","type":"-","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_deleteconfirm_" + param + "_" + key},{"label":"❌ Cancel","hint":"Cancel deletion","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_browse_" + param}}};
+	}
+	else if(action == "download" && param != "")
+	{
+		key = ifnull(parts.get(3),"");
+		requestBody.put("action","getPresignedUrl");
+		requestBody.put("bucket",param);
+		requestBody.put("key",key);
+	}
+	else if(action == "list" || action == "")
+	{
+		requestBody.put("action","listBuckets");
+	}
+	else
+	{
+		// Assume action is a bucket name
+		requestBody.put("action","listObjects");
+		requestBody.put("bucket",action);
+		if(param != "")
+		{
+			requestBody.put("prefix",param);
+		}
+	}
+	// Extract pagination parameters for S3 actions
+	page = ifnull(requestBody.get("page"),1);
+	limit = ifnull(requestBody.get("limit"),5);
+	requestBody.put("page",page);
+	requestBody.put("limit",limit);
+	response = invokeurl
+	[
+		url :"https://aws-cloudops-906900311.development.catalystserverless.com/server/aws_handler/"
+		type :POST
+		parameters:requestBody.toString()
+		headers:{"Content-Type":"application/json"}
+		connection:"awscloudcommander"
+	];
+	if(response.get("success") == true)
+	{
+		data = response.get("data");
+		apiAction = requestBody.get("action");
+		if(apiAction == "listBuckets")
+		{
+			// Extract buckets array and pagination metadata
+			buckets = ifnull(data.get("buckets"),data);
+			pagination = ifnull(data.get("pagination"),Map());
+			currentPage = ifnull(pagination.get("currentPage"),1);
+			totalPages = ifnull(pagination.get("totalPages"),1);
+			totalItems = ifnull(pagination.get("totalItems"),buckets.size());
+			hasPrev = ifnull(pagination.get("hasPrev"),false);
+			hasNext = ifnull(pagination.get("hasNext"),false);
+			
+			if(buckets.size() == 0)
+			{
+				return {"text":"*📦 S3 Buckets - No buckets found*\n\nCreate your first bucket to get started!","card":{"theme":"modern-inline"},"buttons":{{"label":"➕ Create Bucket","hint":"Create new S3 bucket","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_createform"},{"label":"🔄 Refresh","hint":"Reload bucket list","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_refresh"}}};
+			}
+			rows = List();
+			for each  bucket in buckets
+			{
+				bucketName = ifnull(bucket.get("name"),"");
+				bucketRegion = ifnull(bucket.get("region"),"-");
+				// Build inline action buttons
+				browseBtn = "[+📂 Browse](invoke.function|handleButton||s3_browse_" + bucketName + ")";
+				infoBtn = "[+ℹ️ Info](invoke.function|handleButton||s3_info_" + bucketName + ")";
+				deleteBtn = "[+🗑️ Delete](invoke.function|handleButton||s3_deleteconfirm_" + bucketName + ")";
+				row = Map();
+				row.put("Bucket","📦 " + bucketName);
+				row.put("Region",bucketRegion);
+				row.put("",browseBtn + " " + infoBtn + " " + deleteBtn);
+				rows.add(row);
+			}
+			
+			pageText = "";
+			if(totalPages > 1)
+			{
+				pageText = " (Page " + currentPage + " of " + totalPages + ")";
+			}
+			
+			// Build buttons with pagination FIRST
+			buttons = List();
+			baseKey = "s3_refresh";
+			if(totalPages > 1)
+			{
+				if(hasPrev)
+				{
+					buttons.add({"label":"⬅️ Previous","hint":"Go to previous page","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey + "|page|" + (currentPage - 1)});
+				}
+				if(hasNext)
+				{
+					buttons.add({"label":"Next ➡️","hint":"Go to next page","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey + "|page|" + (currentPage + 1)});
+				}
+			}
+			// Add other action buttons after pagination
+			buttons.add({"label":"➕ Create Bucket","hint":"Create new S3 bucket","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_createform"});
+			buttons.add({"label":"🔄 Refresh","hint":"Reload bucket list","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_refresh"});
+			
+			return {"text":"*📦 S3 Buckets (" + totalItems + pageText + ")*","card":{"theme":"modern-inline"},"slides":{{"type":"table","title":"All Buckets","data":{"headers":{"Bucket","Region",""},"rows":rows}}},"buttons":buttons};
+		}
+		else if(apiAction == "listObjects")
+		{
+			folders = ifnull(data.get("folders"),List());
+			files = ifnull(data.get("files"),List());
+			bucket = ifnull(data.get("bucket"),"");
+			prefix = ifnull(data.get("prefix"),"");
+			titleText = bucket;
+			if(prefix != "")
+			{
+				titleText = titleText + " / " + prefix;
+			}
+			// Extract pagination metadata
+			pagination = ifnull(data.get("pagination"),Map());
+			currentPage = ifnull(pagination.get("currentPage"),1);
+			totalPages = ifnull(pagination.get("totalPages"),1);
+			totalItems = ifnull(pagination.get("totalItems"),folders.size() + files.size());
+			hasNext = ifnull(pagination.get("hasNext"),false);
+			hasPrev = ifnull(pagination.get("hasPrev"),false);
+			slides = List();
+			// Add folders
+			if(folders.size() > 0)
+			{
+				folderRows = List();
+				for each  folder in folders
+				{
+					folderRows.add("📁 " + folder.get("name"));
+				}
+				slides.add({"type":"list","title":"Folders (" + folders.size() + ")","data":folderRows});
+			}
+			// Add files as table with inline action buttons
+			if(files.size() > 0)
+			{
+				fileRows = List();
+				for each  file in files
+				{
+					fileName = ifnull(file.get("name"),"");
+					fileKey = ifnull(file.get("key"),"");
+					fileSize = ifnull(file.get("sizeFormatted"),"-");
+					// Build inline action buttons like EC2
+					// Syntax: [+Label](invoke.function|handleButton||key) - Label is the tooltip text
+					downloadBtn = "[+📥 Download](invoke.function|handleButton||s3_download_" + bucket + "_" + fileKey + ")";
+					infoBtn = "[+ℹ️ Info](invoke.function|handleButton||s3_object_" + bucket + "_" + fileKey + ")";
+					deleteBtn = "[-🗑️ Delete](invoke.function|handleButton||s3_delete_" + bucket + "_" + fileKey + ")";
+					row = Map();
+					row.put("Name","📄 " + fileName);
+					row.put("Size",fileSize);
+					row.put("",downloadBtn + " " + infoBtn + " " + deleteBtn);
+					fileRows.add(row);
+				}
+				slides.add({"type":"table","title":"Files (" + files.size() + ")","data":{"headers":{"Name","Size",""},"rows":fileRows}});
+			}
+			if(folders.size() == 0 && files.size() == 0)
+			{
+				return {"text":"*📦 " + titleText + "*\n\nThis location is empty.","card":{"theme":"modern-inline"},"buttons":{{"label":"📤 Upload","hint":"Upload file to bucket","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_upload_form_" + bucket + "_" + prefix},{"label":"ℹ️ Bucket Info","hint":"View bucket details","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_info_" + bucket},{"label":"📦 All Buckets","hint":"View all buckets","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_refresh"}}};
+			}
+			// Build pagination text
+			pageText = "";
+			if(totalPages > 1)
+			{
+				pageText = " (Page " + currentPage + " of " + totalPages + ", " + totalItems + " total)";
+			}
+			// Build buttons with pagination FIRST (so they appear prominently)
+			buttons = List();
+			baseKey = "s3_browse_" + bucket;
+			if(prefix != "")
+			{
+				baseKey = baseKey + "_" + prefix;
+			}
+			// Add pagination buttons FIRST if multiple pages (Previous and Next only - Refresh goes to 3-dot)
+			if(totalPages > 1)
+			{
+				if(hasPrev)
+				{
+					buttons.add({"label":"⬅️ Previous","hint":"Go to previous page","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey + "|page|" + (currentPage - 1)});
+				}
+				if(hasNext)
+				{
+					buttons.add({"label":"Next ➡️","hint":"Go to next page","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey + "|page|" + (currentPage + 1)});
+				}
+				// Refresh goes to 3-dot menu when pagination exists
+				buttons.add({"label":"🔄 Refresh","hint":"Reload current page","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey + "|page|" + currentPage});
+			}
+			else
+			{
+				// No pagination - Refresh can be prominent
+				buttons.add({"label":"🔄 Refresh","hint":"Reload bucket contents","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey});
+			}
+			// Add other action buttons after pagination (these go to 3-dot menu)
+			buttons.add({"label":"📤 Upload","hint":"Upload file to bucket","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_upload_form_" + bucket + "_" + prefix});
+			buttons.add({"label":"ℹ️ Bucket Info","hint":"View bucket details","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_info_" + bucket});
+			buttons.add({"label":"🔍 Search","hint":"Search in bucket","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_search_form_" + bucket});
+			buttons.add({"label":"📦 All Buckets","hint":"View all S3 buckets","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_refresh"});
+			return {"text":"*📦 " + titleText + pageText + "*","card":{"theme":"modern-inline"},"slides":slides,"buttons":buttons};
+		}
+		else if(apiAction == "getPresignedUrl")
+		{
+			url = ifnull(data.get("url"),"");
+			return {"text":"*🔗 Download Link*\n\n" + url + "\n\n⏰ Link expires in 1 hour","card":{"theme":"modern-inline"},"buttons":{{"label":"Open Link","hint":"Open download URL in browser","type":"+","action":{"type":"open.url","data":{"web":url}}},{"label":"Back to Buckets","hint":"View all S3 buckets","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_refresh"}}};
+		}
+		else if(apiAction == "search")
+		{
+			// Handle search results
+			bucket = ifnull(data.get("bucket"),"");
+			searchTerm = ifnull(data.get("searchTerm"),"");
+			matches = ifnull(data.get("matches"),List());
+			totalMatches = ifnull(data.get("totalMatches"),0);
+			if(totalMatches == 0)
+			{
+				return {"text":"*🔍 S3 Search Results*\n\nNo files matching `" + searchTerm + "` found in `" + bucket + "`","card":{"theme":"modern-inline"},"buttons":{{"label":"🔍 Search Again","hint":"New search","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_search_form_" + bucket},{"label":"📦 Browse Bucket","hint":"Browse bucket","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_browse_" + bucket},{"label":"📦 All Buckets","hint":"View all buckets","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_refresh"}}};
+			}
+			fileRows = List();
+			for each  file in matches
+			{
+				fileName = ifnull(file.get("name"),"");
+				fileKey = ifnull(file.get("key"),"");
+				fileSize = ifnull(file.get("sizeFormatted"),"-");
+				// Build inline action buttons - Label is tooltip text
+				downloadBtn = "[+📥 Download](invoke.function|handleButton||s3_download_" + bucket + "_" + fileKey + ")";
+				infoBtn = "[+ℹ️ Info](invoke.function|handleButton||s3_object_" + bucket + "_" + fileKey + ")";
+				deleteBtn = "[-🗑️ Delete](invoke.function|handleButton||s3_delete_" + bucket + "_" + fileKey + ")";
+				row = Map();
+				row.put("Name","📄 " + fileName);
+				row.put("Size",fileSize);
+				row.put("",downloadBtn + " " + infoBtn + " " + deleteBtn);
+				fileRows.add(row);
+			}
+			return {"text":"*🔍 Search: `" + searchTerm + "` in `" + bucket + "`*\n\nFound " + totalMatches + " matching file(s)","card":{"theme":"modern-inline"},"slides":{{"type":"table","title":"Results","data":{"headers":{"Name","Size",""},"rows":fileRows}}},"buttons":{{"label":"🔍 Search Again","hint":"New search","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_search_form_" + bucket},{"label":"📦 Browse Bucket","hint":"Browse bucket","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_browse_" + bucket},{"label":"📦 All Buckets","hint":"View all buckets","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_refresh"}}};
+		}
+		else if(apiAction == "getBucket")
+		{
+			// Handle bucket info/details
+			bucketName = ifnull(data.get("name"),"");
+			bucketRegion = ifnull(data.get("region"),"");
+			totalObjects = ifnull(data.get("totalObjects"),0);
+			totalSize = ifnull(data.get("totalSizeFormatted"),"0 B");
+			approxCount = ifnull(data.get("approximateCount"),false);
+			objectCountText = totalObjects + "";
+			if(approxCount)
+			{
+				objectCountText = totalObjects + "+";
+			}
+			return {"text":"*📦 Bucket Details: " + bucketName + "*","card":{"theme":"modern-inline"},"slides":{{"type":"label","title":"","data":{{"Region":bucketRegion},{"Total Objects":objectCountText},{"Total Size":totalSize}}}},"buttons":{{"label":"📂 Browse","hint":"Browse bucket contents","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_browse_" + bucketName},{"label":"🔍 Search","hint":"Search in bucket","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_search_form_" + bucketName},{"label":"📦 All Buckets","hint":"View all buckets","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_refresh"}}};
+		}
+		else if(apiAction == "getObject")
+		{
+			// Handle object info/metadata
+			bucket = ifnull(data.get("bucket"),"");
+			key = ifnull(data.get("key"),"");
+			fileName = ifnull(key.getSuffix("/"),key);
+			if(fileName == "" || fileName == null)
+			{
+				fileName = key;
+			}
+			size = ifnull(data.get("sizeFormatted"),"—");
+			contentType = ifnull(data.get("contentType"),"—");
+			lastModified = ifnull(data.get("lastModified"),"—");
+			storageClass = ifnull(data.get("storageClass"),"STANDARD");
+			return {"text":"*📄 Object Details: " + fileName + "*","card":{"theme":"modern-inline"},"slides":{{"type":"label","title":"","data":{{"Bucket":bucket},{"Key":"`" + key + "`"},{"Size":size},{"Type":contentType},{"Storage Class":storageClass},{"Last Modified":lastModified}}}},"buttons":{{"label":"📥 Download","hint":"Get download link","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_download_" + bucket + "_" + key},{"label":"🗑️ Delete","hint":"Delete this object","type":"-","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_delete_" + bucket + "_" + key},{"label":"📦 Browse","hint":"Browse bucket","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_browse_" + bucket}}};
+		}
+		else
+		{
+			return {"text":"*S3 action completed.*"};
+		}
+	}
+	else
+	{
+		return {"text":"📦 *S3 Error*\n\n" + ifnull(response.get("error"),"Unknown error"),"card":{"title":"📦 S3 Error","theme":"prompt"}};
+	}
+}
+else if(subcommand == "cost" || subcommand == "costs")
+{
+	// IMPORTANT: Check Cliq DB for cost consent FIRST before calling API
+	// Cost Explorer charges $0.01 per API request!
+	costConsentQuery = Map();
+	costConsentQuery.put("criteria","userid==" + userId);
+	costUserPrefs = zoho.cliq.getRecords("awsprefs",costConsentQuery);
+	hasCostConsent = false;
+	if(costUserPrefs != null && costUserPrefs.get("status") == "SUCCESS")
+	{
+		costPrefList = costUserPrefs.get("list");
+		if(costPrefList != null && costPrefList.size() > 0)
+		{
+			costPref = costPrefList.get(0);
+			if(costPref != null)
+			{
+				consentValue = costPref.get("consentcost");
+				if(consentValue == true || consentValue == "true" || consentValue == 1 || consentValue == "1")
+				{
+					hasCostConsent = true;
+				}
+			}
+		}
+	}
+	// If no consent, show consent prompt instead of calling API
+	if(hasCostConsent == false)
+	{
+		return {"text":"*⚠️ Cost Explorer Requires Consent*\n\n" + "Cost Explorer API charges *$0.01 per request*.\n\n" + "Enable it in Bot Menu → Settings to view cost reports.","card":{"theme":"modern-inline"},"buttons":{{"label":"🏠 Dashboard","hint":"Return to dashboard","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"dashboard"}}};
+	}
+	// User has consent - proceed with cost API
+	action = "week";
+	if(parts.size() > 1)
+	{
+		action = parts.get(1).toLowerCase();
+	}
+	requestBody = Map();
+	requestBody.put("service","cost");
+	requestBody.put("userId",userId);
+	requestBody.put("consent",true);
+	period = "week";
+	if(action == "today")
+	{
+		requestBody.put("action","byPeriod");
+		requestBody.put("period","today");
+		period = "Today";
+	}
+	else if(action == "month")
+	{
+		requestBody.put("action","monthToDate");
+		period = "Month to Date";
+	}
+	else if(action == "compare" || action == "comparison")
+	{
+		requestBody.put("action","comparison");
+		period = "Comparison";
+	}
+	else if(action == "forecast")
+	{
+		requestBody.put("action","forecast");
+		period = "Forecast";
+	}
+	else if(action == "services" || action == "top")
+	{
+		requestBody.put("action","topServices");
+		period = "Top Services";
+	}
+	else if(action == "trend")
+	{
+		requestBody.put("action","trend");
+		period = "Daily Trend";
+	}
+	else if(action == "tag" && param != "")
+	{
+		param = ifnull(parts.get(2),"");
+		requestBody.put("action","byTag");
+		requestBody.put("tagKey",param);
+		period = "By Tag: " + param;
+	}
+	else
+	{
+		requestBody.put("action","byPeriod");
+		requestBody.put("period","week");
+		period = "Last 7 Days";
+	}
+	response = invokeurl
+	[
+		url :"https://aws-cloudops-906900311.development.catalystserverless.com/server/aws_handler/"
+		type :POST
+		parameters:requestBody.toString()
+		headers:{"Content-Type":"application/json"}
+		connection:"awscloudcommander"
+	];
+	if(response.get("success") == true)
+	{
+		data = response.get("data");
+		totalCost = ifnull(data.get("totalCostFormatted"),"$0.00");
+		dailyAvg = ifnull(data.get("dailyAverageFormatted"),"$0.00");
+		// Build service breakdown rows
+		serviceRows = List();
+		services = data.get("byService");
+		if(services != null)
+		{
+			count = 0;
+			for each  svc in services
+			{
+				if(svc.get("cost") > 0 && count < 5)
+				{
+					svcRow = Map();
+					svcRow.put("Service",ifnull(svc.get("emoji"),"") + " " + svc.get("service"));
+					svcRow.put("Cost",svc.get("costFormatted"));
+					svcRow.put("%",svc.get("percentage") + "%");
+					serviceRows.add(svcRow);
+					count = count + 1;
+				}
+			}
+		}
+		// Build slides
+		costSlides = List();
+		costSlides.add({"type":"label","title":"Cost Summary","data":{{"💵 Total":totalCost},{"📊 Daily Average":dailyAvg}},"buttons":{{"label":"Today","hint":"View today's costs","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"cost_today"},{"label":"Month","hint":"Month-to-date costs","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"cost_month"}}});
+		if(serviceRows.size() > 0)
+		{
+			costSlides.add({"type":"table","title":"Top Services","data":{"headers":{"Service","Cost","%"},"rows":serviceRows}});
+		}
+		return {"text":"*💰 AWS Costs - " + period + "*","card":{"theme":"modern-inline"},"slides":costSlides,"buttons":{{"label":"Forecast","hint":"View cost forecast","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"cost_forecast"},{"label":"Trend","hint":"Daily cost trend","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"cost_trend"},{"label":"Compare","hint":"Compare with last month","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"cost_compare"}}};
+	}
+	else if(response.get("requiresConsent") == true)
+	{
+		consentInfo = response.get("consentRequired");
+		return {"text":"*⚠️ Cost Explorer Requires Consent*\n\n" + ifnull(consentInfo.get("message"),"Cost Explorer API charges $0.01 per request.") + "\n\nUse the button below to enable.","card":{"theme":"modern-inline"},"buttons":{{"label":"Enable Cost Reports","hint":"Grant consent for Cost Explorer","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"consent_grant_cost_explorer"}}};
+	}
+	else
+	{
+		return {"text":"💰 *Cost Error*\n\n" + ifnull(response.get("error"),"Unknown error"),"card":{"title":"💰 Cost Error","theme":"prompt"}};
+	}
+}
+else if(subcommand == "lambda")
+{
+	action = "list";
+	actionRaw = "";
+	// Keep original case for function names
+	param = "";
+	if(parts.size() > 1)
+	{
+		actionRaw = parts.get(1);
+		// Original case
+		action = actionRaw.toLowerCase();
+		// Lowercase for keyword comparison
+	}
+	if(parts.size() > 2)
+	{
+		param = parts.get(2);
+	}
+	// Handle invoke action - requires consent check
+	if(action == "invoke")
+	{
+		if(param == "")
+		{
+			// No function name provided - show error
+			return {"text":"*⚡ Lambda Invoke*\n\n❌ Please specify a function name.\n\nUsage: `/aws lambda invoke <function-name>`\n\nOr use `/aws lambda` to see all functions and click Invoke.","card":{"theme":"modern-inline"},"buttons":{{"label":"📋 List Functions","hint":"View all Lambda functions","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_list"}}};
+		}
+		// Check Lambda consent in Cliq database first
+		lambdaConsentQuery = Map();
+		lambdaConsentQuery.put("criteria","userid==" + userId);
+		lambdaUserPrefs = zoho.cliq.getRecords("awsprefs",lambdaConsentQuery);
+		hasLambdaConsent = false;
+		if(lambdaUserPrefs != null && lambdaUserPrefs.get("status") == "SUCCESS")
+		{
+			lambdaPrefList = lambdaUserPrefs.get("list");
+			if(lambdaPrefList != null && lambdaPrefList.size() > 0)
+			{
+				lambdaPref = lambdaPrefList.get(0);
+				if(lambdaPref != null)
+				{
+					consentValue = lambdaPref.get("consentlambda");
+					if(consentValue == true || consentValue == "true" || consentValue == 1 || consentValue == "1")
+					{
+						hasLambdaConsent = true;
+					}
+				}
+			}
+		}
+		if(hasLambdaConsent == false)
+		{
+			// No consent - show invoke form with consent prompt
+			return {"text":"*⚠️ Lambda Invocation Requires Consent*\n\nInvoking Lambda functions uses your *AWS Lambda quota* and may incur costs.\n\n💰 *Pricing:*\n• Depends on your Lambda function configuration\n• Uses your AWS account's Lambda quota\n\nEnable Lambda invocation in Bot Menu → Settings or click below.","card":{"theme":"modern-inline"},"buttons":{{"label":"⚡ Enable Lambda","hint":"Grant consent for Lambda invocation","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"consent_grant_lambda_invoke"},{"label":"📋 List Functions","hint":"View functions without invoking","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_list"}}};
+		}
+		// User has consent - trigger handleButton to show the invoke form (avoid code duplication)
+		return {"text":"*⚡ Invoke Lambda Function*\n\nClick the button below to invoke `" + param + "`","card":{"theme":"modern-inline"},"buttons":{{"label":"▶️ Invoke","hint":"Invoke function","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_invoke_" + param},{"label":"📋 List Functions","hint":"View all functions","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_list"}}};
+	}
+	// Non-invoke actions - build request
+	requestBody = Map();
+	requestBody.put("service","lambda");
+	requestBody.put("userId",userId);
+	requestBody.put("region",userRegion);
+	if(action == "summary")
+	{
+		requestBody.put("action","summary");
+	}
+	else if(action == "logs" && param != "")
+	{
+		// Redirect to logs for this Lambda function
+		requestBody.put("service","logs");
+		requestBody.put("action","lambdaLogs");
+		requestBody.put("functionName",param);
+	}
+	else if(action == "list" || action == "")
+	{
+		requestBody.put("action","list");
+	}
+	else
+	{
+		// Assume action is a function name - get details (use actionRaw to preserve case)
+		requestBody.put("action","get");
+		requestBody.put("functionName",actionRaw);
+	}
+	// Extract pagination parameters for Lambda actions
+	page = ifnull(requestBody.get("page"),1);
+	limit = ifnull(requestBody.get("limit"),5);
+	requestBody.put("page",page);
+	requestBody.put("limit",limit);
+	response = invokeurl
+	[
+		url :"https://aws-cloudops-906900311.development.catalystserverless.com/server/aws_handler/"
+		type :POST
+		parameters:requestBody.toString()
+		headers:{"Content-Type":"application/json"}
+		connection:"awscloudcommander"
+	];
+	if(response.get("success") == true)
+	{
+		data = response.get("data");
+		apiAction = requestBody.get("action");
+		// Handle LIST action
+		if(apiAction == "list")
+		{
+			// Extract functions array and pagination metadata
+			functions = ifnull(data.get("functions"),data);
+			pagination = ifnull(data.get("pagination"),Map());
+			currentPage = ifnull(pagination.get("currentPage"),1);
+			totalPages = ifnull(pagination.get("totalPages"),1);
+			totalItems = ifnull(pagination.get("totalItems"),functions.size());
+			hasPrev = ifnull(pagination.get("hasPrev"),false);
+			hasNext = ifnull(pagination.get("hasNext"),false);
+			
+			if(functions.size() == 0)
+			{
+				return {"text":"*⚡ No Lambda functions found.*\n\nNo functions in this region.","card":{"theme":"modern-inline"},"buttons":{{"label":"🔄 Refresh","hint":"Check again","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_list"},{"label":"🏠 Dashboard","hint":"Return to dashboard","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"dashboard"}}};
+			}
+			// Build table rows with action buttons
+			rows = List();
+			for each  func in functions
+			{
+				funcName = ifnull(func.get("name"),"");
+				runtime = ifnull(func.get("runtime"),"—");
+				memory = ifnull(func.get("memory"),"—");
+				row = Map();
+				row.put("Function","⚡ " + funcName);
+				row.put("Runtime",runtime);
+				row.put("Memory",memory + " MB");
+				// Add invoke button
+				row.put("Actions","[+▶️ Invoke](invoke.function|handleButton||lambda_invoke_" + funcName + ") [+📋 Logs](invoke.function|handleButton||lambda_logs_" + funcName + ")");
+				rows.add(row);
+			}
+			
+			pageText = "";
+			if(totalPages > 1)
+			{
+				pageText = " (Page " + currentPage + " of " + totalPages + ")";
+			}
+			
+			// Build buttons with pagination FIRST
+			buttons = List();
+			baseKey = "lambda_list";
+			if(totalPages > 1)
+			{
+				if(hasPrev)
+				{
+					buttons.add({"label":"⬅️ Previous","hint":"Go to previous page","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey + "|page|" + (currentPage - 1)});
+				}
+				if(hasNext)
+				{
+					buttons.add({"label":"Next ➡️","hint":"Go to next page","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey + "|page|" + (currentPage + 1)});
+				}
+			}
+			// Add other action buttons after pagination
+			buttons.add({"label":"🔄 Refresh","hint":"Reload function list","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_list"});
+			buttons.add({"label":"📊 Summary","hint":"View Lambda summary","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_summary"});
+			
+			return {"text":"*⚡ Lambda Functions (" + totalItems + pageText + ")*","card":{"theme":"modern-inline"},"slides":{{"type":"table","title":"All Functions","data":{"headers":{"Function","Runtime","Memory","Actions"},"rows":rows}}},"buttons":buttons};
+		}
+		// Handle GET (single function details)
+		else if(apiAction == "get")
+		{
+			funcName = ifnull(data.get("name"),"Function");
+			runtime = ifnull(data.get("runtime"),"—");
+			memory = ifnull(data.get("memory"),"—");
+			timeout = ifnull(data.get("timeout"),"—");
+			codeSize = ifnull(data.get("codeSizeFormatted"),"—");
+			state = ifnull(data.get("state"),"—");
+			lastModified = ifnull(data.get("lastModified"),"—");
+			// State emoji
+			stateEmoji = "⚪";
+			if(state == "Active")
+			{
+				stateEmoji = "🟢";
+			}
+			else if(state == "Inactive")
+			{
+				stateEmoji = "🔴";
+			}
+			else if(state == "Pending")
+			{
+				stateEmoji = "🟡";
+			}
+			return {"text":"*⚡ " + funcName + "*","card":{"theme":"modern-inline"},"slides":{{"type":"label","title":"Function Details","data":{{"Runtime":runtime},{"Memory":memory + " MB"},{"Timeout":timeout + "s"},{"Code Size":codeSize},{"State":stateEmoji + " " + state}}}},"buttons":{{"label":"▶️ Invoke","hint":"Execute this function","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_invoke_" + funcName},{"label":"📋 Logs","hint":"View function logs","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_logs_" + funcName},{"label":"📋 List All","hint":"View all functions","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_list"}}};
+		}
+		// Handle SUMMARY
+		else if(apiAction == "summary")
+		{
+			total = ifnull(data.get("total"),0);
+			byRuntime = ifnull(data.get("byRuntime"),Map());
+			// Build runtime breakdown
+			runtimeData = List();
+			for each  key in byRuntime.keys()
+			{
+				runtimeData.add({key:byRuntime.get(key)});
+			}
+			return {"text":"*⚡ Lambda Summary*","card":{"theme":"modern-inline"},"slides":{{"type":"label","title":"Overview","data":{{"📊 Total Functions":total}}}},"buttons":{{"label":"📋 List All","hint":"View all functions","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_list"},{"label":"🏠 Dashboard","hint":"Return to dashboard","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"dashboard"}}};
+		}
+		// Handle Lambda logs redirect
+		else if(apiAction == "lambdaLogs")
+		{
+			events = ifnull(data.get("events"),List());
+			funcName = requestBody.get("functionName");
+			if(events.size() == 0)
+			{
+				return {"text":"*📋 No logs found for " + funcName + "*\n\nThe function may not have been invoked recently.","card":{"theme":"modern-inline"},"buttons":{{"label":"▶️ Invoke","hint":"Execute the function","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_invoke_" + funcName},{"label":"📋 List Functions","hint":"View all functions","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_list"}}};
+			}
+			// Build log rows
+			logRows = List();
+			for each  event in events
+			{
+				if(logRows.size() < 15)
+				{
+					message = ifnull(event.get("message"),"");
+					if(message.length() > 80)
+					{
+						message = message.subString(0,77) + "...";
+					}
+					timestamp = ifnull(event.get("timestamp"),"");
+					if(timestamp.contains("T"))
+					{
+						timePart = timestamp.toList("T").get(1);
+						if(timePart.contains("."))
+						{
+							timePart = timePart.toList(".").get(0);
+						}
+						timestamp = timePart;
+					}
+					row = Map();
+					row.put("Time",timestamp);
+					row.put("Message",message);
+					logRows.add(row);
+				}
+			}
+			return {"text":"*📋 Logs: " + funcName + "*","card":{"theme":"modern-inline"},"slides":{{"type":"table","title":"Recent Logs (" + events.size() + ")","data":{"headers":{"Time","Message"},"rows":logRows}}},"buttons":{{"label":"🔄 Refresh","hint":"Get latest logs","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_logs_" + funcName},{"label":"▶️ Invoke","hint":"Execute function","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_invoke_" + funcName},{"label":"📋 List Functions","hint":"View all functions","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_list"}}};
+		}
+		else
+		{
+			return {"text":"*Lambda action completed.*"};
+		}
+	}
+	else
+	{
+		return {"text":"⚡ *Lambda Error*\n\n" + ifnull(response.get("error"),"Unknown error"),"card":{"title":"⚡ Lambda Error","theme":"prompt"},"buttons":{{"label":"🔄 Try Again","hint":"Retry the request","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_list"},{"label":"🏠 Dashboard","hint":"Return to dashboard","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"dashboard"}}};
+	}
+}
+// ======================== RDS ========================
+else if(subcommand == "rds" || subcommand == "database" || subcommand == "db")
+{
+	action = "list";
+	param = "";
+	if(parts.size() > 1)
+	{
+		action = parts.get(1).toLowerCase();
+	}
+	if(parts.size() > 2)
+	{
+		param = parts.get(2);
+	}
+	requestBody = Map();
+	requestBody.put("service","rds");
+	requestBody.put("userId",userId);
+	requestBody.put("region",userRegion);
+	if(action == "start" && param != "")
+	{
+		requestBody.put("action","start");
+		requestBody.put("dbInstanceId",param);
+	}
+	else if(action == "stop" && param != "")
+	{
+		requestBody.put("action","stop");
+		requestBody.put("dbInstanceId",param);
+	}
+	else if(action == "reboot" && param != "")
+	{
+		requestBody.put("action","reboot");
+		requestBody.put("dbInstanceId",param);
+	}
+	else if(action == "clusters")
+	{
+		requestBody.put("action","clusters");
+	}
+	else if(action == "snapshots")
+	{
+		requestBody.put("action","snapshots");
+	}
+	else if(action == "summary")
+	{
+		requestBody.put("action","summary");
+	}
+	else if(action == "list" || action == "")
+	{
+		requestBody.put("action","list");
+	}
+	else
+	{
+		// Assume action is a DB identifier
+		requestBody.put("action","get");
+		requestBody.put("dbInstanceId",action);
+	}
+	// Extract pagination parameters for RDS actions
+	page = ifnull(requestBody.get("page"),1);
+	limit = ifnull(requestBody.get("limit"),5);
+	requestBody.put("page",page);
+	requestBody.put("limit",limit);
+	response = invokeurl
+	[
+		url :"https://aws-cloudops-906900311.development.catalystserverless.com/server/aws_handler/"
+		type :POST
+		parameters:requestBody.toString()
+		headers:{"Content-Type":"application/json"}
+		connection:"awscloudcommander"
+	];
+	if(response.get("success") == true)
+	{
+		data = response.get("data");
+		apiAction = requestBody.get("action");
+		if(apiAction == "list")
+		{
+			// Extract instances array and pagination metadata
+			instances = ifnull(data.get("instances"),data);
+			pagination = ifnull(data.get("pagination"),Map());
+			currentPage = ifnull(pagination.get("currentPage"),1);
+			totalPages = ifnull(pagination.get("totalPages"),1);
+			totalItems = ifnull(pagination.get("totalItems"),instances.size());
+			hasPrev = ifnull(pagination.get("hasPrev"),false);
+			hasNext = ifnull(pagination.get("hasNext"),false);
+			
+			if(instances.size() == 0)
+			{
+				return {"text":"*No RDS databases found.*","card":{"title":"🗄️ RDS Databases","theme":"modern-inline"},"buttons":{{"label":"View Clusters","hint":"View Aurora clusters","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"rds_clusters"}}};
+			}
+			rows = List();
+			for each  db in instances
+			{
+				row = Map();
+				// Backend returns 'id' field
+				dbId = ifnull(db.get("id"),ifnull(db.get("name"),""));
+				row.put("Name","🗄️ " + dbId);
+				row.put("Engine",ifnull(db.get("engine"),""));
+				row.put("Status",ifnull(db.get("statusEmoji"),"") + " " + ifnull(db.get("status"),""));
+				rows.add(row);
+			}
+			
+			pageText = "";
+			if(totalPages > 1)
+			{
+				pageText = " (Page " + currentPage + " of " + totalPages + ")";
+			}
+			
+			// Build buttons with pagination FIRST
+			buttons = List();
+			baseKey = "rds_list";
+			if(totalPages > 1)
+			{
+				if(hasPrev)
+				{
+					buttons.add({"label":"⬅️ Previous","hint":"Go to previous page","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey + "|page|" + (currentPage - 1)});
+				}
+				if(hasNext)
+				{
+					buttons.add({"label":"Next ➡️","hint":"Go to next page","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey + "|page|" + (currentPage + 1)});
+				}
+			}
+			// Add other action buttons after pagination
+			buttons.add({"label":"🔄 Refresh","hint":"Reload databases","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"rds_list"});
+			buttons.add({"label":"Clusters","hint":"View Aurora clusters","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"rds_clusters"});
+			buttons.add({"label":"Summary","hint":"View summary","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"rds_summary"});
+			
+			return {"text":"*🗄️ RDS Databases (" + totalItems + pageText + ")*","card":{"theme":"modern-inline"},"slides":{{"type":"table","title":"","data":{"headers":{"Name","Engine","Status"},"rows":rows}}},"buttons":buttons};
+		}
+		else if(apiAction == "start" || apiAction == "stop" || apiAction == "reboot")
+		{
+			actionEmoji = "▶️";
+			actionText = "Started";
+			if(apiAction == "stop")
+			{
+				actionEmoji = "⏹️";
+				actionText = "Stopped";
+			}
+			else if(apiAction == "reboot")
+			{
+				actionEmoji = "🔄";
+				actionText = "Rebooted";
+			}
+			// Send notification using dynamic notification system
+			notifMsg = Map();
+			notifMsg.put("text",actionEmoji + " *RDS Database " + actionText + "*\n\n👤 *By:* " + userName + "\n🗄️ *Database:* `" + param + "`\n⏰ *Time:* " + zoho.currenttime.toString("dd MMM yyyy HH:mm"));
+			notifMsg.put("card",{"theme":"modern-inline"});
+			// Get notification channel for RDS
+			channelName = "";
+			notifQuery = Map();
+			notifQuery.put("criteria","userid==" + userId.toString());
+			allUserRecords = zoho.cliq.getRecords("awsnotifications",notifQuery);
+			if(allUserRecords != null && allUserRecords.get("status") == "SUCCESS")
+			{
+				notifList = allUserRecords.get("list");
+				if(notifList != null && notifList.size() > 0)
+				{
+					for each  notifRecord in notifList
+					{
+						if(notifRecord != null && ifnull(notifRecord.get("userid"),"").toString() == userId.toString() && ifnull(notifRecord.get("notificationtype"),"") == "rds")
+						{
+							enabledVal = notifRecord.get("enabled");
+							if(enabledVal == "TRUE" || enabledVal == true || enabledVal == "true" || enabledVal == 1 || enabledVal == "1")
+							{
+								channelRaw = ifnull(notifRecord.get("channel"),"");
+								if(channelRaw != null && channelRaw != "")
+								{
+									// Extract channel name (handles object, JSON string, or plain string)
+									try
+									{
+										if(channelRaw.get("unique_name") != null)
+										{
+											channelName = channelRaw.get("unique_name").toString();
+										}
+										else if(channelRaw.get("name") != null)
+										{
+											channelName = channelRaw.get("name").toString();
+										}
+									}
+									catch(e)
+									{
+										channelName = channelRaw.toString();
+									}
+									if(channelName == "")
+									{
+										channelName = channelRaw.toString();
+									}
+									// Remove # prefix and handle JSON strings
+									if(channelName.startsWith("{"))
+									{
+										if(channelName.contains("\"unique_name\""))
+										{
+											startIdx = channelName.indexOf("\"unique_name\"");
+											valueStart = channelName.indexOf("\"", startIdx + 13) + 1;
+											valueEnd = channelName.indexOf("\"", valueStart);
+											if(valueStart > 0 && valueEnd > valueStart)
+											{
+												channelName = channelName.subString(valueStart, valueEnd);
+											}
+										}
+									}
+									if(channelName.startsWith("#"))
+									{
+										channelName = channelName.subString(1);
+									}
+									break;
+								}
+							}
+						}
+					}
+				}
+			}
+			// Fallback to old system
+			if(channelName == "")
+			{
+				scheduleQuery = Map();
+				scheduleQuery.put("criteria","userid==" + userId);
+				scheduleRecords = zoho.cliq.getRecords("awsschedule",scheduleQuery);
+				if(scheduleRecords != null && scheduleRecords.get("status") == "SUCCESS")
+				{
+					scheduleList = scheduleRecords.get("list");
+					if(scheduleList != null && scheduleList.size() > 0)
+					{
+						schedule = scheduleList.get(0);
+						alertsVal = schedule.get("alertsenabled");
+						if(alertsVal == "TRUE" || alertsVal == true || alertsVal == "true" || alertsVal == 1 || alertsVal == "1")
+						{
+							prefsQuery = Map();
+							prefsQuery.put("criteria","userid==" + userId);
+							prefsRecords = zoho.cliq.getRecords("awsprefs",prefsQuery);
+							if(prefsRecords != null && prefsRecords.get("status") == "SUCCESS")
+							{
+								prefsList = prefsRecords.get("list");
+								if(prefsList != null && prefsList.size() > 0)
+								{
+									channelName = ifnull(prefsList.get(0).get("channel"),"");
+									if(channelName.startsWith("#"))
+									{
+										channelName = channelName.subString(1);
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			// Send notification
+			if(channelName != "" && channelName != null)
+			{
+				zoho.cliq.postToChannelAsBot(channelName,"awscloudcommander",notifMsg);
+			}
+			return {"text":"*" + actionEmoji + " RDS " + apiAction + " initiated for " + param + "*","card":{"title":"🗄️ RDS " + apiAction,"theme":"modern-inline"}};
+		}
+		else if(apiAction == "clusters")
+		{
+			// Extract clusters array and pagination metadata
+			clusters = ifnull(data.get("clusters"),data);
+			pagination = ifnull(data.get("pagination"),Map());
+			currentPage = ifnull(pagination.get("currentPage"),1);
+			totalPages = ifnull(pagination.get("totalPages"),1);
+			totalItems = ifnull(pagination.get("totalItems"),clusters.size());
+			hasPrev = ifnull(pagination.get("hasPrev"),false);
+			hasNext = ifnull(pagination.get("hasNext"),false);
+			
+			// Handle Aurora clusters
+			if(clusters == null || clusters.size() == 0)
+			{
+				return {"text":"*🗄️ No Aurora Clusters Found*\n\nNo Aurora DB clusters in this region.","card":{"theme":"modern-inline"},"buttons":{{"label":"View Databases","hint":"View RDS instances","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"rds_list"}}};
+			}
+			rows = List();
+			for each  cluster in clusters
+			{
+				row = Map();
+				// Backend returns 'id' field
+				clusterName = ifnull(cluster.get("id"),ifnull(cluster.get("name"),""));
+				engine = ifnull(cluster.get("engine"),"");
+				status = ifnull(cluster.get("status"),"");
+				statusEmoji = ifnull(cluster.get("statusEmoji"),"⚪");
+				if(statusEmoji == "⚪" && status != "")
+				{
+					if(status == "available")
+					{
+						statusEmoji = "🟢";
+					}
+					else if(status == "stopped")
+					{
+						statusEmoji = "🔴";
+					}
+					else if(status.contains("ing"))
+					{
+						statusEmoji = "🟡";
+					}
+				}
+				row.put("Cluster","🗄️ " + clusterName);
+				row.put("Engine",engine);
+				row.put("Status",statusEmoji + " " + status);
+				rows.add(row);
+			}
+			
+			pageText = "";
+			if(totalPages > 1)
+			{
+				pageText = " (Page " + currentPage + " of " + totalPages + ")";
+			}
+			
+			// Build buttons with pagination FIRST
+			buttons = List();
+			baseKey = "rds_clusters";
+			if(totalPages > 1)
+			{
+				if(hasPrev)
+				{
+					buttons.add({"label":"⬅️ Previous","hint":"Go to previous page","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey + "|page|" + (currentPage - 1)});
+				}
+				if(hasNext)
+				{
+					buttons.add({"label":"Next ➡️","hint":"Go to next page","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey + "|page|" + (currentPage + 1)});
+				}
+			}
+			// Add other action buttons after pagination
+			buttons.add({"label":"View Databases","hint":"View RDS instances","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"rds_list"});
+			buttons.add({"label":"🔄 Refresh","hint":"Reload clusters","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"rds_clusters"});
+			
+			return {"text":"*🗄️ Aurora Clusters (" + totalItems + pageText + ")*","card":{"theme":"modern-inline"},"slides":{{"type":"table","title":"","data":{"headers":{"Cluster","Engine","Status"},"rows":rows}}},"buttons":buttons};
+		}
+		else if(apiAction == "snapshots")
+		{
+			// Extract snapshots array and pagination metadata
+			snapshots = ifnull(data.get("snapshots"),data);
+			pagination = ifnull(data.get("pagination"),Map());
+			currentPage = ifnull(pagination.get("currentPage"),1);
+			totalPages = ifnull(pagination.get("totalPages"),1);
+			totalItems = ifnull(pagination.get("totalItems"),snapshots.size());
+			hasPrev = ifnull(pagination.get("hasPrev"),false);
+			hasNext = ifnull(pagination.get("hasNext"),false);
+			
+			// Handle RDS snapshots
+			if(snapshots == null || snapshots.size() == 0)
+			{
+				return {"text":"*🗄️ No Snapshots Found*\n\nNo RDS snapshots in this region.","card":{"theme":"modern-inline"},"buttons":{{"label":"View Databases","hint":"View RDS instances","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"rds_list"}}};
+			}
+			rows = List();
+			for each  snap in snapshots
+			{
+				row = Map();
+				// Backend returns 'id' field
+				snapName = ifnull(snap.get("id"),ifnull(snap.get("name"),""));
+				dbId = ifnull(snap.get("dbInstanceId"),ifnull(snap.get("dbInstanceIdentifier"),""));
+				status = ifnull(snap.get("status"),"");
+				statusEmoji = "⚪";
+				if(status == "available")
+				{
+					statusEmoji = "🟢";
+				}
+				row.put("Snapshot","📸 " + snapName);
+				row.put("Database",dbId);
+				row.put("Status",statusEmoji + " " + status);
+				rows.add(row);
+			}
+			
+			pageText = "";
+			if(totalPages > 1)
+			{
+				pageText = " (Page " + currentPage + " of " + totalPages + ")";
+			}
+			
+			// Build buttons with pagination FIRST
+			buttons = List();
+			baseKey = "rds_snapshots";
+			if(totalPages > 1)
+			{
+				if(hasPrev)
+				{
+					buttons.add({"label":"⬅️ Previous","hint":"Go to previous page","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey + "|page|" + (currentPage - 1)});
+				}
+				if(hasNext)
+				{
+					buttons.add({"label":"Next ➡️","hint":"Go to next page","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey + "|page|" + (currentPage + 1)});
+				}
+			}
+			// Add other action buttons after pagination
+			buttons.add({"label":"View Databases","hint":"View RDS instances","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"rds_list"});
+			
+			return {"text":"*📸 RDS Snapshots (" + totalItems + pageText + ")*","card":{"theme":"modern-inline"},"slides":{{"type":"table","title":"","data":{"headers":{"Snapshot","Database","Status"},"rows":rows}}},"buttons":buttons};
+		}
+		else if(apiAction == "summary")
+		{
+			// Handle RDS summary - backend returns 'total' not 'totalInstances'
+			totalInstances = ifnull(data.get("total"),ifnull(data.get("totalInstances"),0));
+			byEngine = ifnull(data.get("byEngine"),Map());
+			byStatus = ifnull(data.get("byStatus"),Map());
+			summaryText = "*🗄️ RDS Summary*\n\n";
+			summaryText = summaryText + "📊 *Total Instances:* " + totalInstances + "\n\n";
+			if(byStatus.size() > 0)
+			{
+				summaryText = summaryText + "*By Status:*\n";
+				for each  statusKey in byStatus.keys()
+				{
+					statusCount = byStatus.get(statusKey);
+					statusEmoji = "⚪";
+					if(statusKey == "available")
+					{
+						statusEmoji = "🟢";
+					}
+					else if(statusKey == "stopped")
+					{
+						statusEmoji = "🔴";
+					}
+					summaryText = summaryText + "• " + statusEmoji + " " + statusKey + ": " + statusCount + "\n";
+				}
+				summaryText = summaryText + "\n";
+			}
+			if(byEngine.size() > 0)
+			{
+				summaryText = summaryText + "*By Engine:*\n";
+				for each  engineKey in byEngine.keys()
+				{
+					engineCount = byEngine.get(engineKey);
+					summaryText = summaryText + "• " + engineKey + ": " + engineCount + "\n";
+				}
+			}
+			return {"text":summaryText,"card":{"theme":"modern-inline"},"buttons":{{"label":"View All","hint":"List all databases","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"rds_list"},{"label":"Clusters","hint":"View Aurora clusters","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"rds_clusters"}}};
+		}
+		else if(apiAction == "get")
+		{
+			// Handle single database details - backend returns 'id' field
+			dbName = ifnull(data.get("id"),ifnull(data.get("name"),"Database"));
+			engine = ifnull(data.get("engine"),"—");
+			engineVersion = ifnull(data.get("engineVersion"),"");
+			status = ifnull(data.get("status"),"—");
+			dbClass = ifnull(data.get("instanceClass"),ifnull(data.get("dbInstanceClass"),"—"));
+			storage = ifnull(data.get("allocatedStorage"),"—");
+			// Endpoint is an object with address and port
+			endpointData = data.get("endpoint");
+			endpoint = "—";
+			if(endpointData != null)
+			{
+				endpointAddr = ifnull(endpointData.get("address"),"");
+				endpointPort = ifnull(endpointData.get("port"),"");
+				if(endpointAddr != "")
+				{
+					endpoint = endpointAddr + ":" + endpointPort;
+				}
+			}
+			statusEmoji = "⚪";
+			if(status == "available")
+			{
+				statusEmoji = "🟢";
+			}
+			else if(status == "stopped")
+			{
+				statusEmoji = "🔴";
+			}
+			else if(status.contains("ing"))
+			{
+				statusEmoji = "🟡";
+			}
+			return {"text":"*🗄️ " + dbName + "*","card":{"theme":"modern-inline"},"slides":{{"type":"label","title":"Database Details","data":{{"Engine":engine + " " + engineVersion},{"Status":statusEmoji + " " + status},{"Class":dbClass},{"Storage":storage + " GB"},{"Endpoint":endpoint}}}},"buttons":{{"label":"▶️ Start","hint":"Start database","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"rds_start_" + dbName},{"label":"⏹️ Stop","hint":"Stop database","type":"-","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"rds_stop_" + dbName},{"label":"📋 List All","hint":"View all databases","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"rds_list"}}};
+		}
+		else
+		{
+			return {"text":"*RDS action completed.*"};
+		}
+	}
+	else
+	{
+		return {"text":"🗄️ *RDS Error*\n\n" + ifnull(response.get("error"),"Unknown error"),"card":{"title":"🗄️ RDS Error","theme":"prompt"}};
+	}
+}
+// ======================== ALARMS ========================
+else if(subcommand == "alarms" || subcommand == "alarm")
+{
+	action = "list";
+	param = "";
+	if(parts.size() > 1)
+	{
+		action = parts.get(1).toLowerCase();
+	}
+	if(parts.size() > 2)
+	{
+		param = parts.get(2);
+	}
+	requestBody = Map();
+	requestBody.put("service","cloudwatch");
+	requestBody.put("userId",userId);
+	requestBody.put("region",userRegion);
+	if(action == "active")
+	{
+		requestBody.put("action","getActiveAlarms");
+	}
+	else if(action == "history" && param != "")
+	{
+		requestBody.put("action","getAlarmHistory");
+		requestBody.put("alarmName",param);
+	}
+	else if(action == "summary")
+	{
+		requestBody.put("action","summary");
+	}
+	else if(action == "list" || action == "")
+	{
+		requestBody.put("action","listAlarms");
+	}
+	else
+	{
+		// Assume action is an alarm name
+		requestBody.put("action","getAlarm");
+		requestBody.put("alarmName",action);
+	}
+	// Extract pagination parameters for CloudWatch actions
+	page = ifnull(requestBody.get("page"),1);
+	limit = ifnull(requestBody.get("limit"),5);
+	requestBody.put("page",page);
+	requestBody.put("limit",limit);
+	response = invokeurl
+	[
+		url :"https://aws-cloudops-906900311.development.catalystserverless.com/server/aws_handler/"
+		type :POST
+		parameters:requestBody.toString()
+		headers:{"Content-Type":"application/json"}
+		connection:"awscloudcommander"
+	];
+	if(response.get("success") == true)
+	{
+		data = response.get("data");
+		apiAction = requestBody.get("action");
+		if(apiAction == "listAlarms" || apiAction == "getActiveAlarms")
+		{
+			// Extract alarms array and pagination metadata
+			alarms = ifnull(data.get("alarms"),data);
+			pagination = ifnull(data.get("pagination"),Map());
+			currentPage = ifnull(pagination.get("currentPage"),1);
+			totalPages = ifnull(pagination.get("totalPages"),1);
+			totalItems = ifnull(pagination.get("totalItems"),alarms.size());
+			hasPrev = ifnull(pagination.get("hasPrev"),false);
+			hasNext = ifnull(pagination.get("hasNext"),false);
+			
+			if(alarms.size() == 0)
+			{
+				return {"text":"*🔔 CloudWatch Alarms*\n\nNo alarms found. Create one to start monitoring your AWS resources.","card":{"theme":"modern-inline"},"buttons":{{"label":"➕ Create Alarm","hint":"Create new alarm","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"alarm_create"},{"label":"🏠 Dashboard","hint":"Return to dashboard","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"dashboard"}}};
+			}
+			rows = List();
+			for each  alarm in alarms
+			{
+				alarmName = ifnull(alarm.get("name"),"");
+				stateEmoji = ifnull(alarm.get("stateEmoji"),"🔔");
+				state = ifnull(alarm.get("state"),"");
+				metric = ifnull(alarm.get("metric"),"");
+				// Add inline action buttons
+				detailsBtn = "[+" + stateEmoji + " Details](invoke.function|handleButton||alarm_details_" + alarmName + ")";
+				row = Map();
+				row.put("Name","🔔 " + alarmName);
+				row.put("State",stateEmoji + " " + state);
+				row.put("Metric",metric);
+				row.put("",detailsBtn);
+				rows.add(row);
+			}
+			
+			pageText = "";
+			if(totalPages > 1)
+			{
+				pageText = " (Page " + currentPage + " of " + totalPages + ")";
+			}
+			
+			// Build buttons with pagination FIRST
+			buttons = List();
+			baseKey = "alarms_list";
+			if(apiAction == "getActiveAlarms")
+			{
+				baseKey = "alarms_active";
+			}
+			if(totalPages > 1)
+			{
+				if(hasPrev)
+				{
+					buttons.add({"label":"⬅️ Previous","hint":"Go to previous page","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey + "|page|" + (currentPage - 1)});
+				}
+				if(hasNext)
+				{
+					buttons.add({"label":"Next ➡️","hint":"Go to next page","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":baseKey + "|page|" + (currentPage + 1)});
+				}
+			}
+			// Add other action buttons after pagination
+			buttons.add({"label":"➕ Create Alarm","hint":"Create new alarm","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"alarm_create"});
+			if(apiAction == "listAlarms")
+			{
+				buttons.add({"label":"🚨 Active Only","hint":"Show active alarms","type":"-","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"alarms_active"});
+			}
+			buttons.add({"label":"🔄 Refresh","hint":"Reload alarms","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"alarms_list"});
+			
+			return {"text":"*🔔 CloudWatch Alarms (" + totalItems + pageText + ")*","card":{"theme":"modern-inline"},"slides":{{"type":"table","title":"","data":{"headers":{"Name","State","Metric",""},"rows":rows}}},"buttons":buttons};
+		}
+		else if(apiAction == "getAlarm")
+		{
+			return {"text":"*🔔 " + ifnull(data.get("name"),"Alarm") + "*","card":{"theme":"modern-inline"},"slides":{{"type":"label","title":"","data":{{"State":ifnull(data.get("stateEmoji"),"") + " " + ifnull(data.get("state"),"-")},{"Metric":ifnull(data.get("metric"),"-")},{"Namespace":ifnull(data.get("namespace"),"-")},{"Threshold":ifnull(data.get("threshold"),"-")},{"Reason":ifnull(data.get("stateReason"),"-")}}}}};
+		}
+		else
+		{
+			return {"text":"*Alarm action completed.*"};
+		}
+	}
+	else
+	{
+		return {"text":"🔔 *CloudWatch Error*\n\n" + ifnull(response.get("error"),"Unknown error"),"card":{"title":"🔔 CloudWatch Error","theme":"prompt"}};
+	}
+}
+// ======================== LOGS ========================
+else if(subcommand == "logs" || subcommand == "log")
+{
+	action = "list";
+	actionRaw = "list";
+	param = "";
+	paramRaw = "";
+	if(parts.size() > 1)
+	{
+		actionRaw = parts.get(1);
+		action = actionRaw.toLowerCase();
+	}
+	if(parts.size() > 2)
+	{
+		paramRaw = parts.get(2);
+		param = paramRaw.toLowerCase();
+	}
+	requestBody = Map();
+	requestBody.put("service","logs");
+	requestBody.put("userId",userId);
+	requestBody.put("region",userRegion);
+	if(action == "summary")
+	{
+		requestBody.put("action","summary");
+	}
+	else if(action == "lambda" && param != "")
+	{
+		requestBody.put("action","lambdaLogs");
+		requestBody.put("functionName",paramRaw);
+	}
+	else if(action == "list" || action == "")
+	{
+		requestBody.put("action","listGroups");
+	}
+	else if(action == "errors" || action == "error")
+	{
+		// /aws logs errors - search all log groups for errors (need to pick one first)
+		// Show log group picker for error search
+		return {"text":"*🔍 Search Errors in Log Group*\n\nWhich log group would you like to search for errors?\n\n*Usage:* `/aws logs <log-group-name> errors`\n\nExample: `/aws logs /aws/lambda/myFunction errors`","card":{"theme":"modern-inline"},"buttons":{{"label":"📋 View Log Groups","hint":"See all log groups","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"logs_refresh"}}};
+	}
+	else if(action == "filter")
+	{
+		// /aws logs filter <log-group> <pattern>
+		// paramRaw = log group name (preserve case), parts.get(3) = pattern
+		if(paramRaw == "")
+		{
+			return {"text":"*🔍 Filter Logs*\n\nMissing log group name!\n\n*Usage:* `/aws logs filter <log-group-name> <pattern>`\n\nExample: `/aws logs filter /aws/lambda/myFunction ERROR`","card":{"theme":"modern-inline"},"buttons":{{"label":"📋 View Log Groups","hint":"See all log groups","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"logs_refresh"}}};
+		}
+		filterPattern = "";
+		if(parts.size() > 3)
+		{
+			filterPattern = parts.get(3);
+		}
+		if(filterPattern == "")
+		{
+			return {"text":"*🔍 Filter Logs*\n\nMissing filter pattern!\n\n*Usage:* `/aws logs filter <log-group-name> <pattern>`\n\nExample: `/aws logs filter " + paramRaw + " ERROR`","card":{"theme":"modern-inline"},"buttons":{{"label":"📋 View Log Groups","hint":"See all log groups","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"logs_refresh"}}};
+		}
+		requestBody.put("action","filter");
+		requestBody.put("logGroupName",paramRaw);
+		requestBody.put("filterPattern",filterPattern);
+	}
+	else
+	{
+		// actionRaw is log group name (e.g., /aws logs /aws/lambda/myFunc) - preserve case!
+		if(param == "errors" || param == "error")
+		{
+			requestBody.put("action","errors");
+			requestBody.put("logGroupName",actionRaw);
+		}
+		else if(param == "filter")
+		{
+			filterPattern = "";
+			if(parts.size() > 3)
+			{
+				filterPattern = parts.get(3);
+			}
+			requestBody.put("action","filter");
+			requestBody.put("logGroupName",actionRaw);
+			requestBody.put("filterPattern",filterPattern);
+		}
+		else
+		{
+			requestBody.put("action","recent");
+			requestBody.put("logGroupName",actionRaw);
+		}
+	}
+	// Extract pagination parameters for Logs actions
+	page = ifnull(requestBody.get("page"),1);
+	limit = ifnull(requestBody.get("limit"),5);
+	requestBody.put("page",page);
+	requestBody.put("limit",limit);
+	response = invokeurl
+	[
+		url :"https://aws-cloudops-906900311.development.catalystserverless.com/server/aws_handler/"
+		type :POST
+		parameters:requestBody.toString()
+		headers:{"Content-Type":"application/json"}
+		connection:"awscloudcommander"
+	];
+	if(response.get("success") == true)
+	{
+		data = response.get("data");
+		apiAction = requestBody.get("action");
+		if(apiAction == "summary")
+		{
+			// Handle logs summary response
+			totalLogGroups = ifnull(data.get("totalLogGroups"),0);
+			totalStoredBytesFormatted = ifnull(data.get("totalStoredBytesFormatted"),"0 B");
+			byPrefix = ifnull(data.get("byPrefix"),Map());
+			summaryText = "*📋 CloudWatch Logs Summary*\n\n";
+			summaryText = summaryText + "📊 *Total Log Groups:* " + totalLogGroups + "\n";
+			summaryText = summaryText + "💾 *Total Storage:* " + totalStoredBytesFormatted + "\n\n";
+			if(byPrefix.size() > 0)
+			{
+				summaryText = summaryText + "*By Service:*\n";
+				for each  prefixKey in byPrefix.keys()
+				{
+					prefixCount = byPrefix.get(prefixKey);
+					summaryText = summaryText + "• " + prefixKey + ": " + prefixCount + "\n";
+				}
+			}
+			return {"text":summaryText,"card":{"theme":"modern-inline"},"buttons":{{"label":"📋 View All","hint":"List all log groups","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"logs_refresh"},{"label":"🏠 Dashboard","hint":"Return to dashboard","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"dashboard"}}};
+		}
+		else if(apiAction == "listGroups")
+		{
+			// Extract log groups array and pagination metadata
+			logGroups = ifnull(data.get("logGroups"),data);
+			pagination = ifnull(data.get("pagination"),Map());
+			currentPage = ifnull(pagination.get("currentPage"),1);
+			totalPages = ifnull(pagination.get("totalPages"),1);
+			totalItems = ifnull(pagination.get("totalItems"),logGroups.size());
+			hasPrev = ifnull(pagination.get("hasPrev"),false);
+			hasNext = ifnull(pagination.get("hasNext"),false);
+			
+			if(logGroups.size() == 0)
+			{
+				return {"text":"*No log groups found.*","card":{"theme":"modern-inline"},"buttons":{{"label":"Refresh","hint":"Check for log groups again","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"logs_refresh"}}};
+			}
+			// Build table with log group details
+			rows = List();
+			lambdaCount = 0;
+			apiGwCount = 0;
+			otherCount = 0;
+			for each  logGroup in logGroups
+			{
+				groupName = ifnull(logGroup.get("name"),"");
+				// Count by type
+				if(groupName.contains("/aws/lambda/"))
+				{
+					lambdaCount = lambdaCount + 1;
+				}
+				else if(groupName.contains("/aws/apigateway/") || groupName.contains("/aws/api-gateway/"))
+				{
+					apiGwCount = apiGwCount + 1;
+				}
+				else
+				{
+					otherCount = otherCount + 1;
+				}
+				// Show full path for user to copy, truncate middle if too long
+				displayName = groupName;
+				if(groupName.length() > 35)
+				{
+					// Keep start and end, truncate middle
+					displayName = groupName.subString(0,15) + "..." + groupName.subString(groupName.length() - 17);
+				}
+				// Determine icon by type
+				typeIcon = "📋";
+				if(groupName.contains("/aws/lambda/"))
+				{
+					typeIcon = "⚡";
+				}
+				else if(groupName.contains("/aws/apigateway/"))
+				{
+					typeIcon = "🌐";
+				}
+				else if(groupName.contains("/aws/rds/"))
+				{
+					typeIcon = "🗄️";
+				}
+				else if(groupName.contains("/aws/ec2/"))
+				{
+					typeIcon = "🖥️";
+				}
+				row = Map();
+				row.put("Log Group",typeIcon + " " + displayName);
+				row.put("Size",ifnull(logGroup.get("storedBytesFormatted"),"—"));
+				row.put("Retention",ifnull(logGroup.get("retentionInDays"),"∞"));
+				// Add view button - replace / with ~ for key encoding
+				encodedName = groupName.replaceAll("/","~");
+				row.put("Action","[+📋 View](invoke.function|handleButton||logs_view_" + encodedName + ")");
+				rows.add(row);
+			}
+			return {"text":"*📋 Log Groups (" + totalItems + pageText + ")*","card":{"theme":"modern-inline"},"slides":{{"type":"label","title":"Summary","data":{{"⚡ Lambda":lambdaCount},{"🌐 API Gateway":apiGwCount},{"📋 Other":otherCount}}},{"type":"table","title":"All Log Groups","data":{"headers":{"Log Group","Size","Retention","Action"},"rows":rows}}},"buttons":buttons};
+		}
+		else
+		{
+			// Recent/errors/filter - return log entries
+			events = ifnull(data.get("events"),data);
+			logGroupName = ifnull(data.get("logGroupName"),requestBody.get("logGroupName"));
+			// Encode log group name for button keys (replace / with ~)
+			encodedLogGroup = logGroupName.replaceAll("/","~");
+			if(events.size() == 0)
+			{
+				return {"text":"*📋 No log entries found*\n\nNo recent logs in this group.","card":{"theme":"modern-inline"},"buttons":{{"label":"Search Errors","hint":"Search for error messages","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"logs_errors_" + encodedLogGroup},{"label":"Back","hint":"Return to log groups","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"logs_refresh"}}};
+			}
+			// Build log entries display
+			logRows = List();
+			for each  event in events
+			{
+				if(logRows.size() < 15)
+				{
+					message = ifnull(event.get("message"),"");
+					// Truncate long messages
+					if(message.length() > 80)
+					{
+						message = message.subString(0,77) + "...";
+					}
+					// Add timestamp if available
+					timestamp = ifnull(event.get("timestamp"),"");
+					if(timestamp != "")
+					{
+						// Just show time part
+						if(timestamp.contains("T"))
+						{
+							timePart = timestamp.toList("T").get(1);
+							if(timePart.contains("."))
+							{
+								timePart = timePart.toList(".").get(0);
+							}
+							timestamp = timePart;
+						}
+					}
+					row = Map();
+					row.put("Time",timestamp);
+					row.put("Message",message);
+					logRows.add(row);
+				}
+			}
+			// Display name for title
+			displayTitle = logGroupName;
+			if(displayTitle.length() > 40)
+			{
+				displayTitle = "..." + displayTitle.subString(displayTitle.length() - 37,displayTitle.length());
+			}
+			return {"text":"*📋 Logs: " + displayTitle + "*","card":{"theme":"modern-inline"},"slides":{{"type":"table","title":"Recent Entries (" + events.size() + ")","data":{"headers":{"Time","Message"},"rows":logRows}}},"buttons":{{"label":"Errors Only","hint":"Filter for error logs","type":"-","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"logs_errors_" + encodedLogGroup},{"label":"Refresh","hint":"Get latest logs","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"logs_view_" + encodedLogGroup},{"label":"Back","hint":"Return to log groups","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"logs_refresh"}}};
+		}
+	}
+	else
+	{
+		return {"text":"📋 *Logs Error*\n\n" + ifnull(response.get("error"),"Unknown error"),"card":{"title":"📋 Logs Error","theme":"prompt"}};
+	}
+}
+// ======================== SNS ========================
+else if(subcommand == "sns")
+{
+	action = "list";
+	param = "";
+	if(parts.size() > 1)
+	{
+		action = parts.get(1).toLowerCase();
+	}
+	if(parts.size() > 2)
+	{
+		param = parts.get(2);
+	}
+	requestBody = Map();
+	requestBody.put("service","sns");
+	requestBody.put("userId",userId);
+	requestBody.put("region",userRegion);
+	if(action == "subs" || action == "subscriptions")
+	{
+		if(param != "")
+		{
+			requestBody.put("action","topicSubscriptions");
+			requestBody.put("topicArn",param);
+		}
+		else
+		{
+			requestBody.put("action","listSubscriptions");
+		}
+	}
+	else if(action == "publish" && param != "")
+	{
+		// Get message from remaining parts
+		msgParts = parts.subList(3,parts.size());
+		message = msgParts.toString(" ");
+		requestBody.put("action","publish");
+		requestBody.put("topicArn",param);
+		requestBody.put("message",message);
+		requestBody.put("consent",true);
+	}
+	else if(action == "summary")
+	{
+		requestBody.put("action","summary");
+	}
+	else if(action == "list" || action == "")
+	{
+		requestBody.put("action","listTopics");
+	}
+	else
+	{
+		// Assume action is topic ARN
+		requestBody.put("action","getTopic");
+		requestBody.put("topicArn",action);
+	}
+	response = invokeurl
+	[
+		url :"https://aws-cloudops-906900311.development.catalystserverless.com/server/aws_handler/"
+		type :POST
+		parameters:requestBody.toString()
+		headers:{"Content-Type":"application/json"}
+		connection:"awscloudcommander"
+	];
+	if(response.get("success") == true)
+	{
+		data = response.get("data");
+		apiAction = requestBody.get("action");
+		if(apiAction == "listTopics")
+		{
+			if(data.size() == 0)
+			{
+				return {"text":"*No SNS topics found.*\n\nCreate a topic in AWS Console to get started.","card":{"title":"📢 SNS Topics","theme":"modern-inline"}};
+			}
+			// Build table rows with inline action buttons (like EC2)
+			tableRows = List();
+			for each  topic in data
+			{
+				topicArn = ifnull(topic.get("arn"),"");
+				topicName = ifnull(topic.get("name"),"");
+				// If name is empty, extract from ARN
+				if(topicName == "" && topicArn != "")
+				{
+					arnParts = topicArn.toList(":");
+					topicName = arnParts.get(arnParts.size() - 1);
+				}
+				// Truncate ARN for display
+				arnDisplay = topicArn;
+				if(topicArn.length() > 45)
+				{
+					arnDisplay = "..." + topicArn.subString(topicArn.length() - 40,topicArn.length());
+				}
+				// Build inline action buttons using markdown link syntax
+				publishBtn = "[+📨 Publish](invoke.function|handleButton||sns_publish_" + topicArn + ")";
+				subsBtn = "[+👥 Subs](invoke.function|handleButton||sns_subs_" + topicArn + ")";
+				detailsBtn = "[+ℹ️ Info](invoke.function|handleButton||sns_details_" + topicArn + ")";
+				row = Map();
+				row.put("📢 Topic","*" + topicName + "*");
+				row.put("ARN","`" + arnDisplay + "`");
+				row.put("Actions",publishBtn + " " + subsBtn + " " + detailsBtn);
+				tableRows.add(row);
+			}
+			return {"text":"*📢 SNS Topics (" + data.size() + ")*","card":{"theme":"modern-inline"},"slides":{{"type":"table","title":"","data":{"headers":{"📢 Topic","ARN","Actions"},"rows":tableRows}}},"buttons":{{"label":"🏠 Dashboard","hint":"Return to dashboard","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"dashboard"}}};
+		}
+		else if(apiAction == "publish")
+		{
+			// Send notification using dynamic notification system
+			// Extract topic name from ARN
+			topicName = param;
+			if(param.contains(":"))
+			{
+				arnParts = param.toList(":");
+				topicName = arnParts.get(arnParts.size() - 1);
+			}
+			notifMsg = Map();
+			notifMsg.put("text","📢 *SNS Message Published*\n\n👤 *By:* " + userName + "\n📨 *Topic:* " + topicName + "\n⏰ *Time:* " + zoho.currenttime.toString("dd MMM yyyy HH:mm"));
+			notifMsg.put("card",{"theme":"modern-inline"});
+			// Get notification channel for SNS
+			channelName = "";
+			notifQuery = Map();
+			notifQuery.put("criteria","userid==" + userId.toString());
+			allUserRecords = zoho.cliq.getRecords("awsnotifications",notifQuery);
+			if(allUserRecords != null && allUserRecords.get("status") == "SUCCESS")
+			{
+				notifList = allUserRecords.get("list");
+				if(notifList != null && notifList.size() > 0)
+				{
+					for each  notifRecord in notifList
+					{
+						if(notifRecord != null && ifnull(notifRecord.get("userid"),"").toString() == userId.toString() && ifnull(notifRecord.get("notificationtype"),"") == "sns")
+						{
+							enabledVal = notifRecord.get("enabled");
+							if(enabledVal == "TRUE" || enabledVal == true || enabledVal == "true" || enabledVal == 1 || enabledVal == "1")
+							{
+								channelRaw = ifnull(notifRecord.get("channel"),"");
+								if(channelRaw != null && channelRaw != "")
+								{
+									// Extract channel name (handles object, JSON string, or plain string)
+									try
+									{
+										if(channelRaw.get("unique_name") != null)
+										{
+											channelName = channelRaw.get("unique_name").toString();
+										}
+										else if(channelRaw.get("name") != null)
+										{
+											channelName = channelRaw.get("name").toString();
+										}
+									}
+									catch(e)
+									{
+										channelName = channelRaw.toString();
+									}
+									if(channelName == "")
+									{
+										channelName = channelRaw.toString();
+									}
+									// Remove # prefix and handle JSON strings
+									if(channelName.startsWith("{"))
+									{
+										if(channelName.contains("\"unique_name\""))
+										{
+											startIdx = channelName.indexOf("\"unique_name\"");
+											valueStart = channelName.indexOf("\"", startIdx + 13) + 1;
+											valueEnd = channelName.indexOf("\"", valueStart);
+											if(valueStart > 0 && valueEnd > valueStart)
+											{
+												channelName = channelName.subString(valueStart, valueEnd);
+											}
+										}
+									}
+									if(channelName.startsWith("#"))
+									{
+										channelName = channelName.subString(1);
+									}
+									break;
+								}
+							}
+						}
+					}
+				}
+			}
+			// Fallback to old system
+			if(channelName == "")
+			{
+				scheduleQuery = Map();
+				scheduleQuery.put("criteria","userid==" + userId);
+				scheduleRecords = zoho.cliq.getRecords("awsschedule",scheduleQuery);
+				if(scheduleRecords != null && scheduleRecords.get("status") == "SUCCESS")
+				{
+					scheduleList = scheduleRecords.get("list");
+					if(scheduleList != null && scheduleList.size() > 0)
+					{
+						schedule = scheduleList.get(0);
+						alertsVal = schedule.get("alertsenabled");
+						if(alertsVal == "TRUE" || alertsVal == true || alertsVal == "true" || alertsVal == 1 || alertsVal == "1")
+						{
+							prefsQuery = Map();
+							prefsQuery.put("criteria","userid==" + userId);
+							prefsRecords = zoho.cliq.getRecords("awsprefs",prefsQuery);
+							if(prefsRecords != null && prefsRecords.get("status") == "SUCCESS")
+							{
+								prefsList = prefsRecords.get("list");
+								if(prefsList != null && prefsList.size() > 0)
+								{
+									channelName = ifnull(prefsList.get(0).get("channel"),"");
+									if(channelName.startsWith("#"))
+									{
+										channelName = channelName.subString(1);
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			// Send notification
+			if(channelName != "" && channelName != null)
+			{
+				zoho.cliq.postToChannelAsBot(channelName,"awscloudcommander",notifMsg);
+			}
+			return {"text":"*✅ Message published successfully!*","card":{"title":"📢 SNS Publish","theme":"modern-inline"}};
+		}
+		else
+		{
+			return {"text":"*SNS action completed.*"};
+		}
+	}
+	else
+	{
+		return {"text":"📢 *SNS Error*\n\n" + ifnull(response.get("error"),"Unknown error"),"card":{"title":"📢 SNS Error","theme":"prompt"}};
+	}
+}
+// ======================== IAM ========================
+else if(subcommand == "iam")
+{
+	action = "summary";
+	param = "";
+	if(parts.size() > 1)
+	{
+		action = parts.get(1).toLowerCase();
+	}
+	if(parts.size() > 2)
+	{
+		param = parts.get(2);
+	}
+	requestBody = Map();
+	requestBody.put("service","iam");
+	requestBody.put("userId",userId);
+	requestBody.put("region",userRegion);
+	if(action == "users")
+	{
+		requestBody.put("action","listUsers");
+	}
+	else if(action == "user" && param != "")
+	{
+		requestBody.put("action","getUser");
+		requestBody.put("userName",param);
+	}
+	else if(action == "roles")
+	{
+		requestBody.put("action","listRoles");
+	}
+	else if(action == "security")
+	{
+		requestBody.put("action","securityStatus");
+	}
+	else if(action == "account")
+	{
+		requestBody.put("action","accountSummary");
+	}
+	else
+	{
+		requestBody.put("action","summary");
+	}
+	response = invokeurl
+	[
+		url :"https://aws-cloudops-906900311.development.catalystserverless.com/server/aws_handler/"
+		type :POST
+		parameters:requestBody.toString()
+		headers:{"Content-Type":"application/json"}
+		connection:"awscloudcommander"
+	];
+	if(response.get("success") == true)
+	{
+		data = response.get("data");
+		apiAction = requestBody.get("action");
+		if(apiAction == "securityStatus")
+		{
+			score = ifnull(data.get("score"),0);
+			issues = ifnull(data.get("issues"),List());
+			scoreEmoji = "🔴";
+			if(score >= 80)
+			{
+				scoreEmoji = "🟢";
+			}
+			else if(score >= 50)
+			{
+				scoreEmoji = "🟡";
+			}
+			return {"text":"*🔐 IAM Security Audit*","card":{"theme":"modern-inline"},"slides":{{"type":"label","title":"","data":{{"Security Score":scoreEmoji + " " + score + "/100"},{"Users with MFA":ifnull(data.get("usersWithMFA"),0) + "/" + ifnull(data.get("totalUsers"),0)},{"Issues Found":issues.size()}}}}};
+		}
+		else if(apiAction == "listUsers")
+		{
+			if(data == null || data.size() == 0)
+			{
+				return {"text":"*No IAM users found.*","card":{"title":"👥 IAM Users","theme":"modern-inline"}};
+			}
+			rows = List();
+			for each  iamUser in data
+			{
+				row = Map();
+				row.put("User","👤 " + ifnull(iamUser.get("userName"),""));
+				mfaStatus = "❌ No";
+				if(ifnull(iamUser.get("mfaEnabled"),false) == true)
+				{
+					mfaStatus = "✅ Yes";
+				}
+				row.put("MFA",mfaStatus);
+				rows.add(row);
+			}
+			return {"text":"*👥 IAM Users (" + data.size() + ")*","card":{"theme":"modern-inline"},"slides":{{"type":"table","title":"","data":{"headers":{"User","MFA"},"rows":rows}}}};
+		}
+		else if(apiAction == "listRoles")
+		{
+			if(data == null || data.size() == 0)
+			{
+				return {"text":"*🎭 IAM Roles*\n\nNo IAM roles found.","card":{"theme":"modern-inline"}};
+			}
+			rolesText = "*🎭 IAM Roles (" + data.size() + ")*\n\n";
+			for each  iamRole in data
+			{
+				roleName = ifnull(iamRole.get("roleName"),ifnull(iamRole.get("name"),"—"));
+				roleArn = ifnull(iamRole.get("arn"),"");
+				roleDesc = ifnull(iamRole.get("description"),"");
+				rolesText = rolesText + "*" + roleName + "*\n";
+				if(roleDesc != "")
+				{
+					rolesText = rolesText + "• " + roleDesc + "\n";
+				}
+				if(roleArn != "")
+				{
+					rolesText = rolesText + "• `" + roleArn + "`\n";
+				}
+				rolesText = rolesText + "\n";
+			}
+			return {"text":rolesText,"card":{"theme":"modern-inline"}};
+		}
+		else
+		{
+			// Default summary - handle both map and other formats
+			userCount = ifnull(data.get("users"),0);
+			roleCount = ifnull(data.get("roles"),0);
+			policyCount = ifnull(data.get("policies"),0);
+			return {"text":"*🔐 IAM Summary*","card":{"theme":"modern-inline"},"slides":{{"type":"label","title":"","data":{{"👥 Users":userCount},{"🎭 Roles":roleCount},{"📜 Policies":policyCount}}}}};
+		}
+	}
+	else
+	{
+		return {"text":"🔐 *IAM Error*\n\n" + ifnull(response.get("error"),"Unknown error"),"card":{"title":"🔐 IAM Error","theme":"prompt"}};
+	}
+}
+// ======================== AI ========================
+else if(subcommand == "ai" || subcommand == "ask" || subcommand == "claude")
+{
+	// Get the full question from remaining arguments
+	questionParts = parts.subList(1,parts.size());
+	question = questionParts.toString(" ");
+	if(question == "" || question == null)
+	{
+		return {"text":"*🤖 AI Assistant*\n\n" + "Ask me anything about AWS!\n\n" + "Examples:\n" + "/aws ai how do I reduce EC2 costs?\n" + "/aws ai explain VPC peering\n" + "/aws ai troubleshoot high CPU on my instance","card":{"theme":"prompt"}};
+	}
+	// Check Cliq DB for AI consent first
+	aiConsentQuery = Map();
+	aiConsentQuery.put("criteria","userid==" + userId);
+	userPrefs = zoho.cliq.getRecords("awsprefs",aiConsentQuery);
+	hasAiConsent = false;
+	// getRecords returns {"status":"SUCCESS","list":[...]}
+	if(userPrefs != null && userPrefs.get("status") == "SUCCESS")
+	{
+		prefList = userPrefs.get("list");
+		if(prefList != null && prefList.size() > 0)
+		{
+			userPref = prefList.get(0);
+			if(userPref != null)
+			{
+				consentValue = userPref.get("consentai");
+				if(consentValue == true || consentValue == "true" || consentValue == 1 || consentValue == "1")
+				{
+					hasAiConsent = true;
+				}
+			}
+		}
+	}
+	if(hasAiConsent == false)
+	{
+		// No consent in Cliq DB - show consent prompt
+		return {"text":"*⚠️ AI Assistant Requires Consent*\n\n" + "Bedrock AI (Claude) costs ~$0.01-0.15 per query.\n\n" + "Click below to enable.","card":{"title":"🔐 Consent Required","theme":"modern-inline"},"buttons":{{"label":"Enable AI Assistant","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"consent_grant_bedrock_ai"}}};
+	}
+	// User has consent - proceed with API call
+	requestBody = Map();
+	requestBody.put("service","bedrock");
+	requestBody.put("action","chat");
+	requestBody.put("prompt",question);
+	requestBody.put("userId",userId);
+	requestBody.put("region","us-east-1");
+	requestBody.put("consent",true);
+	response = invokeurl
+	[
+		url :"https://aws-cloudops-906900311.development.catalystserverless.com/server/aws_handler/"
+		type :POST
+		parameters:requestBody.toString()
+		headers:{"Content-Type":"application/json"}
+		connection:"awscloudcommander"
+	];
+	if(response.get("success") == true)
+	{
+		data = response.get("data");
+		aiResponse = ifnull(data.get("response"),"No response generated.");
+		return {"text":"*🤖 AI Response*\n\n" + aiResponse,"card":{"theme":"prompt"}};
+	}
+	else
+	{
+		return {"text":"🤖 *AI Error*\n\n" + ifnull(response.get("error"),"Unknown error"),"card":{"title":"🤖 AI Error","theme":"prompt"}};
+	}
+}
+// ======================== PERMISSIONS ========================
+else if(subcommand == "permissions" || subcommand == "perms")
+{
+	action = "check";
+	if(parts.size() > 1)
+	{
+		action = parts.get(1).toLowerCase();
+	}
+	requestBody = Map();
+	requestBody.put("service","permissions");
+	requestBody.put("userId",userId);
+	if(action == "policy")
+	{
+		requestBody.put("action","getRequiredPolicy");
+	}
+	else
+	{
+		requestBody.put("action","checkAll");
+	}
+	response = invokeurl
+	[
+		url :"https://aws-cloudops-906900311.development.catalystserverless.com/server/aws_handler/"
+		type :POST
+		parameters:requestBody.toString()
+		headers:{"Content-Type":"application/json"}
+		connection:"awscloudcommander"
+	];
+	if(response.get("success") == true)
+	{
+		data = response.get("data");
+		if(requestBody.get("action") == "getRequiredPolicy")
+		{
+			return {"text":"*📜 Required IAM Policy*\n\nCopy this policy and attach it to your IAM user:\n\n" + data.get("policy"),"card":{"title":"📜 IAM Policy","theme":"modern-inline"}};
+		}
+		else
+		{
+			summary = ifnull(data.get("summary"),Map());
+			passed = ifnull(summary.get("passed"),0);
+			failed = ifnull(summary.get("failed"),0);
+			return {"text":"*🔑 IAM Permissions Check*","card":{"theme":"modern-inline"},"slides":{{"type":"label","title":"","data":{{"✅ Passed":passed},{"❌ Failed":failed}}}}};
+		}
+	}
+	else
+	{
+		return {"text":"🔐 *Permissions Error*\n\n" + ifnull(response.get("error"),"Unknown error"),"card":{"title":"🔐 Permissions Error","theme":"prompt"}};
+	}
+}
+// ======================== CONSENT ========================
+// Reads consent status from Cliq database (awsprefs table)
+else if(subcommand == "consent")
+{
+	action = "status";
+	if(parts.size() > 1)
+	{
+		action = parts.get(1).toLowerCase();
+	}
+	// Get current prefs from Cliq database
+	consentQuery = Map();
+	consentQuery.put("criteria","userid==" + userId);
+	consentPrefs = zoho.cliq.getRecords("awsprefs",consentQuery);
+	hasCostConsent = false;
+	hasAiConsent = false;
+	hasLambdaConsent = false;
+	hasSnsConsent = false;
+	recordId = "";
+	if(consentPrefs != null && consentPrefs.get("status") == "SUCCESS")
+	{
+		prefList = consentPrefs.get("list");
+		if(prefList != null && prefList.size() > 0)
+		{
+			pref = prefList.get(0);
+			recordId = ifnull(pref.get("id"),"");
+			costVal = pref.get("consentcost");
+			if(costVal == true || costVal == "true" || costVal == "TRUE" || costVal == 1 || costVal == "1")
+			{
+				hasCostConsent = true;
+			}
+			aiVal = pref.get("consentai");
+			if(aiVal == true || aiVal == "true" || aiVal == "TRUE" || aiVal == 1 || aiVal == "1")
+			{
+				hasAiConsent = true;
+			}
+			lambdaVal = pref.get("consentlambda");
+			if(lambdaVal == true || lambdaVal == "true" || lambdaVal == "TRUE" || lambdaVal == 1 || lambdaVal == "1")
+			{
+				hasLambdaConsent = true;
+			}
+			snsVal = pref.get("consentsns");
+			if(snsVal == true || snsVal == "true" || snsVal == "TRUE" || snsVal == 1 || snsVal == "1")
+			{
+				hasSnsConsent = true;
+			}
+		}
+	}
+	// Handle grant/revoke actions
+	if(action == "cost" || action == "ai" || action == "lambda" || action == "sns")
+	{
+		// Toggle the consent
+		updateData = Map();
+		if(action == "cost")
+		{
+			updateData.put("consentcost",!hasCostConsent);
+			newStatus = !hasCostConsent;
+		}
+		else if(action == "ai")
+		{
+			updateData.put("consentai",!hasAiConsent);
+			newStatus = !hasAiConsent;
+		}
+		else if(action == "lambda")
+		{
+			updateData.put("consentlambda",!hasLambdaConsent);
+			newStatus = !hasLambdaConsent;
+		}
+		else if(action == "sns")
+		{
+			updateData.put("consentsns",!hasSnsConsent);
+			newStatus = !hasSnsConsent;
+		}
+		if(recordId != "")
+		{
+			zoho.cliq.updateRecord("awsprefs",recordId,updateData);
+		}
+		else
+		{
+			updateData.put("userid",userId);
+			zoho.cliq.createRecord("awsprefs",updateData);
+		}
+		statusText = "disabled";
+		statusEmoji = "🚫";
+		if(newStatus == true)
+		{
+			statusText = "enabled";
+			statusEmoji = "✅";
+		}
+		return {"text":statusEmoji + " *" + action.toUpperCase() + " consent " + statusText + "!*\n\nUse `/aws consent` to see all consent status.","card":{"theme":"modern-inline"}};
+	}
+	// Show status
+	costStatus = "❌ Disabled";
+	if(hasCostConsent)
+	{
+		costStatus = "✅ Enabled";
+	}
+	aiStatus = "❌ Disabled";
+	if(hasAiConsent)
+	{
+		aiStatus = "✅ Enabled";
+	}
+	lambdaStatus = "❌ Disabled";
+	if(hasLambdaConsent)
+	{
+		lambdaStatus = "✅ Enabled";
+	}
+	snsStatus = "❌ Disabled";
+	if(hasSnsConsent)
+	{
+		snsStatus = "✅ Enabled";
+	}
+	statusText = "*🔐 Consent Status*\n\n";
+	statusText = statusText + "💰 *Cost Explorer:* " + costStatus + "\n";
+	statusText = statusText + "   └ $0.01 per API request\n";
+	statusText = statusText + "   └ Toggle: `/aws consent cost`\n\n";
+	statusText = statusText + "🤖 *AI Assistant:* " + aiStatus + "\n";
+	statusText = statusText + "   └ $0.01-0.15 per query\n";
+	statusText = statusText + "   └ Toggle: `/aws consent ai`\n\n";
+	statusText = statusText + "⚡ *Lambda Invoke:* " + lambdaStatus + "\n";
+	statusText = statusText + "   └ Standard Lambda pricing\n";
+	statusText = statusText + "   └ Toggle: `/aws consent lambda`\n\n";
+	statusText = statusText + "📢 *SNS Publish:* " + snsStatus + "\n";
+	statusText = statusText + "   └ Standard SNS pricing\n";
+	statusText = statusText + "   └ Toggle: `/aws consent sns`";
+	return {"text":statusText,"card":{"theme":"modern-inline"}};
+}
+// ======================== SETTINGS ========================
+// ======================== INCIDENTS ========================
+// NOTE: This uses the SAME card structure as handleButton incident_list for consistency
+else if(subcommand == "incidents" || subcommand == "incident")
+{
+	action = "list";
+	if(parts.size() > 1)
+	{
+		action = parts.get(1).toLowerCase();
+	}
+	if(action == "create" || action == "new")
+	{
+		// Return incident creation form - SAME as handleButton incident_create
+		return {"type":"form","title":"🚨 Create Incident","hint":"Report a new AWS incident","name":"awsIncidentForm","button_label":"🚨 Create Incident","inputs":[{"type":"text","name":"title","label":"Incident Title","placeholder":"Brief description of the issue","mandatory":true},{"type":"select","name":"severity","label":"Severity","placeholder":"Select severity level","mandatory":true,"value":"medium","options":[{"value":"critical","label":"Critical - Service Down"},{"value":"high","label":"High - Major Impact"},{"value":"medium","label":"Medium - Partial Impact"},{"value":"low","label":"Low - Minor Issue"}]},{"type":"text","name":"resource","label":"Affected Resource","placeholder":"e.g., ec2:i-1234567890abcdef0","mandatory":false},{"type":"textarea","name":"notes","label":"Additional Notes","placeholder":"Any additional information...","mandatory":false}],"action":{"type":"invoke.function","name":"handleForm"}};
+	}
+	else if(action == "history")
+	{
+		// Show only resolved/closed incidents
+		incidentCriteria = Map();
+		incidentsResponse = zoho.cliq.getRecords("awsincidents",incidentCriteria);
+		incidents = List();
+		if(incidentsResponse != null && incidentsResponse.get("status") == "SUCCESS")
+		{
+			incidentList = incidentsResponse.get("list");
+			if(incidentList != null)
+			{
+				for each  inc in incidentList
+				{
+					status = ifnull(inc.get("status"),"");
+					if(status == "resolved" || status == "closed")
+					{
+						incidents.add(inc);
+					}
+				}
+			}
+		}
+		if(incidents.size() == 0)
+		{
+			return {"text":"*📜 No resolved incidents found.*\n\nOnly resolved or closed incidents are shown here.","card":{"theme":"modern-inline"},"buttons":{{"label":"View All","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"incident_list"},{"label":"Create Incident","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"incident_create"}}};
+		}
+		// Build rows with actions
+		rows = List();
+		for each  inc in incidents
+		{
+			if(rows.size() < 10)
+			{
+				row = Map();
+				incId = ifnull(inc.get("incidentid"),"");
+				row.put("ID",incId);
+				row.put("Title",ifnull(inc.get("title"),""));
+				severity = ifnull(inc.get("severity"),"");
+				severityEmoji = "🟡";
+				if(severity == "critical")
+				{
+					severityEmoji = "🔴";
+				}
+				else if(severity == "high")
+				{
+					severityEmoji = "🟠";
+				}
+				else if(severity == "low")
+				{
+					severityEmoji = "🟢";
+				}
+				row.put("Severity",severityEmoji + " " + severity);
+				status = ifnull(inc.get("status"),"");
+				statusEmoji = "✅";
+				row.put("Status",statusEmoji + " " + status);
+				// Add actions
+				row.put("Actions","[ℹ️ Info](invoke.function|handleButton||incident_info_" + incId + ") | [✏️ Update](invoke.function|handleButton||incident_update_" + incId + ") | [🗑️ Delete](invoke.function|handleButton||incident_delete_" + incId + ")");
+				rows.add(row);
+			}
+		}
+		return {"text":"*📜 Incident History (" + incidents.size() + " resolved/closed)*","card":{"theme":"modern-inline"},"slides":{{"type":"table","title":"","data":{"headers":{"ID","Title","Severity","Status","Actions"},"rows":rows}}},"buttons":{{"label":"🔄 Refresh","hint":"Reload incident history","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"incident_history"},{"label":"View All","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"incident_list"},{"label":"Create Incident","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"incident_create"}}};
+	}
+	else
+	{
+		// List all incidents - SAME structure as handleButton incident_list
+		incidentCriteria = Map();
+		incidentsResponse = zoho.cliq.getRecords("awsincidents",incidentCriteria);
+		incidents = List();
+		if(incidentsResponse != null && incidentsResponse.get("status") == "SUCCESS")
+		{
+			incidentList = incidentsResponse.get("list");
+			if(incidentList != null)
+			{
+				incidents = incidentList;
+			}
+		}
+		if(incidents.size() == 0)
+		{
+			return {"text":"*🚨 No incidents found.*\n\nUse the button below to create one.","card":{"theme":"modern-inline"},"buttons":{{"label":"Create Incident","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"incident_create"}}};
+		}
+		// Build rows with Actions column
+		rows = List();
+		for each  inc in incidents
+		{
+			if(rows.size() < 10)
+			{
+				row = Map();
+				incId = ifnull(inc.get("incidentid"),"");
+				row.put("ID",incId);
+				row.put("Title",ifnull(inc.get("title"),""));
+				severity = ifnull(inc.get("severity"),"");
+				severityEmoji = "🟡";
+				if(severity == "critical")
+				{
+					severityEmoji = "🔴";
+				}
+				else if(severity == "high")
+				{
+					severityEmoji = "🟠";
+				}
+				else if(severity == "low")
+				{
+					severityEmoji = "🟢";
+				}
+				row.put("Severity",severityEmoji + " " + severity);
+				status = ifnull(inc.get("status"),"");
+				statusEmoji = "🔵";
+				if(status == "resolved" || status == "closed")
+				{
+					statusEmoji = "✅";
+				}
+				row.put("Status",statusEmoji + " " + status);
+				// Add Info, Update, Delete actions
+				row.put("Actions","[ℹ️ Info](invoke.function|handleButton||incident_info_" + incId + ") [✏️ Update](invoke.function|handleButton||incident_update_" + incId + ") [🗑️ Delete](invoke.function|handleButton||incident_delete_" + incId + ")");
+				rows.add(row);
+			}
+		}
+		return {"text":"*🚨 Incidents (" + incidents.size() + ")*","card":{"theme":"modern-inline"},"slides":{{"type":"table","title":"","data":{"headers":{"ID","Title","Severity","Status","Actions"},"rows":rows}}},"buttons":{{"label":"🔄 Refresh","hint":"Reload incidents","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"incident_list"},{"label":"Create Incident","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"incident_create"}}};
+	}
+}
+// ======================== DEFAULT: DASHBOARD ========================
+else
+{
+	requestBody = Map();
+	requestBody.put("service","dashboard");
+	requestBody.put("action","overview");
+	requestBody.put("userId",userId);
+	requestBody.put("region",userRegion);
+	// NOTE: Do NOT send consent:true here - Cost Explorer will be called automatically
+	// and charge $0.01 per request! Costs should only be fetched when user explicitly
+	// requests /aws cost with consent.
+	response = invokeurl
+	[
+		url :"https://aws-cloudops-906900311.development.catalystserverless.com/server/aws_handler/"
+		type :POST
+		parameters:requestBody.toString()
+		headers:{"Content-Type":"application/json"}
+		connection:"awscloudcommander"
+	];
+	// Check for setup required error
+	if(response.get("code") == "SETUP_REQUIRED")
+	{
+		return {"text":"⚠️ *Setup Required*\n\nPlease complete your AWS setup first to use this extension.\n\nClick below to get started →","card":{"title":"Setup Needed","thumbnail":"https://www.monks.com/data/styles/738x363_crop/s3/2024-12/AWS.png?VersionId=AgciRGgmrM5MOD.WFIdw68QeG8kI.JR.&h=c74750f6&itok=q-7iCrYZ","theme":"prompt"},"buttons":{{"label":"Complete Setup","action":{"type":"invoke.function","data":{"name":"setupForm"}},"key":"start_setup"}}};
+	}
+	if(response.get("success") == true)
+	{
+		data = response.get("data");
+		// Extract counts
+		ec2Data = ifnull(data.get("ec2"),Map());
+		ec2Total = ifnull(ec2Data.get("total"),0);
+		ec2States = ifnull(ec2Data.get("byState"),Map());
+		ec2Running = ifnull(ec2States.get("running"),0);
+		ec2Stopped = ifnull(ec2States.get("stopped"),0);
+		s3Data = ifnull(data.get("s3"),Map());
+		s3Total = ifnull(s3Data.get("totalBuckets"),0);
+		lambdaData = ifnull(data.get("lambda"),Map());
+		lambdaTotal = ifnull(lambdaData.get("total"),0);
+		alarmsData = ifnull(data.get("alarms"),Map());
+		alarmStates = ifnull(alarmsData.get("byState"),Map());
+		alarmsActive = ifnull(alarmStates.get("ALARM"),0);
+		alarmsOk = ifnull(alarmStates.get("OK"),0);
+		return {"text":"*☁️ AWS Dashboard*","card":{"theme":"modern-inline"},"slides":{{"type":"label","title":"🖥️ Compute","data":{{"EC2 Instances":ec2Total + " total"},{"Running":"🟢 " + ec2Running},{"Stopped":"🔴 " + ec2Stopped}},"buttons":{{"label":"EC2","hint":"Manage EC2 instances","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ec2_refresh"},{"label":"Lambda","hint":"View Lambda functions","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_list"}}},{"type":"label","title":"📦 Storage & Functions","data":{{"S3 Buckets":s3Total + " buckets"},{"Lambda Functions":lambdaTotal + " functions"}},"buttons":{{"label":"S3","hint":"Browse S3 buckets","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_refresh"}}},{"type":"label","title":"🔔 Monitoring","data":{{"Active Alarms":"🔴 " + alarmsActive},{"OK Alarms":"🟢 " + alarmsOk}},"buttons":{{"label":"Alarms","hint":"Check CloudWatch alarms","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"alarms_list"}}}},"buttons":{{"label":"Costs","hint":"View AWS spending","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"cost_week"},{"label":"AI","hint":"Ask AI assistant","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ai_form"},{"label":"Settings","hint":"Configure preferences","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"settings_form"},{"label":"Help","hint":"Show all commands","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"help_show"}}};
+	}
+	else
+	{
+		return {"text":"*☁️ AWS Cloud Commander*\n\n❌ Failed to load dashboard: " + ifnull(response.get("error"),"Unknown error") + "\n\nTry /aws status to check backend connection.","card":{"theme":"modern-inline"},"buttons":{{"label":"Check Status","hint":"Test backend connection","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"health_check"},{"label":"Retry","hint":"Try loading dashboard again","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"dashboard"}}};
+	}
+}

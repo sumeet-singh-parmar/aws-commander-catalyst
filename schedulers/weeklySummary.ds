@@ -1,0 +1,265 @@
+// ============================================================================
+// AWS Cloud Commander - Weekly Infrastructure Summary Scheduler
+// ============================================================================
+// Purpose: Sends weekly AWS infrastructure summary to configured Cliq channels
+//
+// This scheduler runs once per week (configured in Zoho Cliq Scheduler settings)
+// Only sends summaries to users who have enabled weeklySummary in awsschedule table
+//
+// Flow:
+//   1. Queries awsschedule table for users with weeklySummary=TRUE
+//   2. For each enabled user:
+//      a. Fetches user's custom backend URL (if Option 3)
+//      b. Calls backend APIs to get resource counts:
+//         - EC2 instances (running/stopped)
+//         - S3 buckets (count and total size)
+//         - Lambda functions
+//         - RDS instances
+//         - CloudWatch alarms (by state)
+//      c. Formats comprehensive summary card
+//      d. Sends formatted card to user's configured notification channel
+//
+// Notification Channel:
+//   - Uses dynamic notification system (awsnotifications table)
+//   - Falls back to awsprefs.channel if notification not configured
+//   - Uses postToChannelAsBot for channel posting
+//
+// Requires:
+//   - User must have credentials configured
+//   - User must have weeklySummary enabled in awsschedule
+// ============================================================================
+
+// Configuration
+DEFAULT_API_URL = "https://aws-cloudops-906900311.development.catalystserverless.com/server/aws_handler/";
+
+// Get all users who have weekly summary enabled
+// NOTE: Zoho Cliq DB stores booleans as "TRUE"/"FALSE" strings
+scheduleQuery = Map();
+scheduleQuery.put("criteria", "weeklysummary==TRUE");
+scheduleRecords = zoho.cliq.getRecords("awsschedule", scheduleQuery);
+
+if(scheduleRecords != null && scheduleRecords.get("status") == "SUCCESS")
+{
+    userList = scheduleRecords.get("list");
+
+    if(userList != null && userList.size() > 0)
+    {
+        for each userSchedule in userList
+        {
+            userId = ifnull(userSchedule.get("userid"), "");
+
+            // Skip if no userId
+            if(userId == "")
+            {
+                continue;
+            }
+
+            // Get channel using dynamic notification system
+            channelName = "";
+            enabled = false;
+            
+            // Fetch user's region preference (default: ap-south-1)
+            region = "ap-south-1";
+            prefsQuery = Map();
+            prefsQuery.put("criteria", "userid==" + userId);
+            prefsRecords = zoho.cliq.getRecords("awsprefs", prefsQuery);
+            if(prefsRecords != null && prefsRecords.get("status") == "SUCCESS")
+            {
+                prefsList = prefsRecords.get("list");
+                if(prefsList != null && prefsList.size() > 0)
+                {
+                    prefs = prefsList.get(0);
+                    if(prefs != null)
+                    {
+                        region = ifnull(prefs.get("region"), "ap-south-1");
+                    }
+                }
+            }
+            
+            // Check awsnotifications table for weekly_summary notifications
+            notifQuery = Map();
+            notifQuery.put("criteria", "userid==" + userId + " AND notificationtype==weekly_summary");
+            notifRecords = zoho.cliq.getRecords("awsnotifications", notifQuery);
+            if(notifRecords != null && notifRecords.get("status") == "SUCCESS")
+            {
+                notifList = notifRecords.get("list");
+                if(notifList != null && notifList.size() > 0)
+                {
+                    notifRecord = notifList.get(0);
+                    if(notifRecord != null)
+                    {
+                        enabledVal = notifRecord.get("enabled");
+                        if(enabledVal == "TRUE" || enabledVal == true || enabledVal == "true" || enabledVal == 1 || enabledVal == "1")
+                        {
+                            enabled = true;
+                            // Extract channel - ensure it's a string, not an object
+                            channelRaw = ifnull(notifRecord.get("channel"),"");
+                            channelName = "";
+                            if(channelRaw != null)
+                            {
+                                channelStr = channelRaw.toString();
+                                if(channelStr.startsWith("{"))
+                                {
+                                    try
+                                    {
+                                        channelObj = channelRaw;
+                                        if(channelObj.get("unique_name") != null)
+                                        {
+                                            channelName = channelObj.get("unique_name").toString();
+                                        }
+                                        else if(channelObj.get("name") != null)
+                                        {
+                                            channelName = channelObj.get("name").toString();
+                                            if(channelName.startsWith("#"))
+                                            {
+                                                channelName = channelName.subString(1);
+                                            }
+                                        }
+                                    }
+                                    catch(e)
+                                    {
+                                        channelName = "";
+                                    }
+                                }
+                                else
+                                {
+                                    channelName = channelStr;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Fallback to old system for backward compatibility (channel only, region already fetched above)
+            if(channelName == "")
+            {
+                prefsQuery = Map();
+                prefsQuery.put("criteria", "userid==" + userId);
+                prefsRecords = zoho.cliq.getRecords("awsprefs", prefsQuery);
+                if(prefsRecords != null && prefsRecords.get("status") == "SUCCESS")
+                {
+                    prefsList = prefsRecords.get("list");
+                    if(prefsList != null && prefsList.size() > 0)
+                    {
+                        prefs = prefsList.get(0);
+                        channelName = ifnull(prefs.get("channel"), "");
+                    }
+                }
+            }
+
+            // Skip if no channel configured
+            if(channelName == "")
+            {
+                continue;
+            }
+
+            // Get user's backend URL from awssetup (for Option 3: Own Backend)
+            API_URL = DEFAULT_API_URL;
+            setupQuery = Map();
+            setupQuery.put("criteria","userid==" + userId);
+            setupRecords = zoho.cliq.getRecords("awssetup",setupQuery);
+            if(setupRecords != null && setupRecords.get("status") == "SUCCESS")
+            {
+                setupList = setupRecords.get("list");
+                if(setupList != null && setupList.size() > 0)
+                {
+                    setupRecord = setupList.get(0);
+                    customBackendUrl = ifnull(setupRecord.get("backendurl"),"");
+                    if(customBackendUrl != null && customBackendUrl != "")
+                    {
+                        API_URL = customBackendUrl;
+                    }
+                }
+            }
+
+            // Call dashboard API to get overview
+            requestBody = Map();
+            requestBody.put("service", "dashboard");
+            requestBody.put("action", "overview");
+            requestBody.put("userId", userId);
+            requestBody.put("region", region);
+
+            apiResponse = invokeurl
+            [
+                url: API_URL
+                type: POST
+                parameters: requestBody.toString()
+                headers: {"Content-Type": "application/json"}
+                connection: "awscloudcommander"
+            ];
+
+            if(apiResponse.get("success") == true)
+            {
+                data = apiResponse.get("data");
+
+                // Extract data
+                ec2Data = ifnull(data.get("ec2"), Map());
+                ec2Total = ifnull(ec2Data.get("total"), 0);
+                ec2Running = ifnull(ec2Data.get("running"), 0);
+                ec2Stopped = ifnull(ec2Data.get("stopped"), 0);
+
+                s3Data = ifnull(data.get("s3"), Map());
+                s3Total = ifnull(s3Data.get("totalBuckets"), 0);
+
+                lambdaData = ifnull(data.get("lambda"), Map());
+                lambdaTotal = ifnull(lambdaData.get("total"), 0);
+
+                alarmsData = ifnull(data.get("alarms"), Map());
+                alarmStates = ifnull(alarmsData.get("byState"), Map());
+                alarmsActive = ifnull(alarmStates.get("ALARM"), 0);
+                alarmsOk = ifnull(alarmStates.get("OK"), 0);
+
+                // Build summary message
+                summaryText = "*📊 Weekly AWS Infrastructure Summary*\n\n";
+                summaryText = summaryText + "📅 Week ending: " + zoho.currentdate.toString("dd MMM yyyy") + "\n";
+                summaryText = summaryText + "🌍 Region: " + region + "\n\n";
+
+                summaryText = summaryText + "*🖥️ EC2 Instances:*\n";
+                summaryText = summaryText + "   • Total: " + ec2Total + "\n";
+                summaryText = summaryText + "   • 🟢 Running: " + ec2Running + "\n";
+                summaryText = summaryText + "   • 🔴 Stopped: " + ec2Stopped + "\n\n";
+
+                summaryText = summaryText + "*📦 S3 Buckets:* " + s3Total + "\n\n";
+
+                summaryText = summaryText + "*⚡ Lambda Functions:* " + lambdaTotal + "\n\n";
+
+                summaryText = summaryText + "*🔔 CloudWatch Alarms:*\n";
+                summaryText = summaryText + "   • 🟢 OK: " + alarmsOk + "\n";
+                summaryText = summaryText + "   • 🔴 Active: " + alarmsActive + "\n";
+
+                // Add alert if there are active alarms
+                if(alarmsActive > 0)
+                {
+                    summaryText = summaryText + "\n⚠️ *Attention:* " + alarmsActive + " alarm(s) require attention!";
+                }
+
+                // Build message
+                message = Map();
+                message.put("text", summaryText);
+                message.put("card", {"theme": "modern-inline"});
+                message.put("buttons", {
+                    {"label": "🖥️ EC2", "hint": "View EC2 instances", "type": "+", "action": {"type": "invoke.function", "data": {"name": "handleButton"}}, "key": "ec2_refresh"},
+                    {"label": "📦 S3", "hint": "View S3 buckets", "type": "+", "action": {"type": "invoke.function", "data": {"name": "handleButton"}}, "key": "s3_refresh"},
+                    {"label": "🔔 Alarms", "hint": "View alarms", "type": "+", "action": {"type": "invoke.function", "data": {"name": "handleButton"}}, "key": "alarms_list"},
+                    {"label": "🏠 Dashboard", "hint": "Open dashboard", "type": "+", "action": {"type": "invoke.function", "data": {"name": "handleButton"}}, "key": "dashboard"}
+                });
+
+                // Post to channel as bot
+                zoho.cliq.postToChannelAsBot(channelName, "awscloudcommander", message);
+
+                // Log
+                logEntry = Map();
+                logEntry.put("logid", "LOG-" + zoho.currenttime.toLong());
+                logEntry.put("userid", userId);
+                logEntry.put("username", "Scheduler");
+                logEntry.put("action", "summary:weekly");
+                logEntry.put("resource", "infrastructure");
+                logEntry.put("timestamp", zoho.currenttime.toLong().toString());
+                logEntry.put("result", "success");
+                logEntry.put("details", "Weekly summary posted to: " + channelName);
+                zoho.cliq.createRecord("awsauditlog", logEntry);
+            }
+        }
+    }
+}

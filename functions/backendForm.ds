@@ -1,0 +1,276 @@
+// ============================================================================
+// AWS Cloud Commander - Backend URL Configuration Form
+// ============================================================================
+// Purpose: Collects and validates custom backend URL for Option 3 setup
+//
+// This form is shown when user selects "Own Backend" setup option
+//
+// IMPORTANT: Backend-Agnostic Validation
+//   - This validation works for ANY backend deployment location:
+//     • Catalyst (catalystserverless.com)
+//     • Self-hosted servers (your-domain.com)
+//     • Cloud platforms (AWS Lambda, Azure Functions, Google Cloud Run, etc.)
+//     • Any other deployment location
+//   - We do NOT restrict to Catalyst-specific domains or paths
+//   - Only requirement: Backend must respond to health check with expected format
+//
+// Flow:
+//   1. User enters backend URL (e.g., https://your-backend.example.com/api/aws_handler/)
+//   2. Validates URL format (must start with http:// or https://)
+//   3. Tests connection via health check endpoint (POST with service="health")
+//   4. Validates response structure:
+//      - Must have success: true
+//      - Must have data.status == "healthy" OR data.service exists
+//      - Service name should indicate AWS handler (optional check)
+//   5. If valid: Stores backend URL in awssetup.backendurl, sets setuptype="own_backend"
+//   6. Shows prompt to enter credentials (user not yet onboarded)
+//   7. If invalid: Shows error card with troubleshooting tips
+//
+// Note: User is NOT marked onboarded until credentials are also provided and verified
+// ============================================================================
+
+// Get user info safely
+userName = "there";
+userId = "";
+if(user != null)
+{
+    userName = ifnull(user.get("first_name"), ifnull(user.get("name"), "there"));
+    userId = ifnull(user.get("id"), "");
+}
+
+// Check if form is being submitted
+if(form != null && form.get("values") != null)
+{
+    formValues = form.get("values");
+    
+    // Check if backend_url exists (to ensure it's a submission, not initial display)
+    if(formValues.get("backend_url") != null)
+    {
+        // ============================================================================
+        // FORM SUBMITTED - Test connection and update setup
+        // ============================================================================
+        
+        backendUrl = formValues.get("backend_url");
+        info "Backend URL: " + backendUrl;
+        
+        // Validate required field
+        if(backendUrl == "")
+        {
+            return {
+                "text": "❌ *Error: Backend URL Required*\n\nPlease enter your backend URL.",
+                "card": {
+                    "title": "Validation Error",
+                    "theme": "prompt"
+                }
+            };
+        }
+        
+        // Validate URL format (backend-agnostic - works for any deployment location)
+        // Only checks that URL starts with http:// or https://
+        // Does NOT restrict to specific domains (e.g., Catalyst-only) or paths
+        // Works for: Catalyst, self-hosted, AWS Lambda, Azure Functions, Google Cloud Run, etc.
+        if(!backendUrl.contains("http://") && !backendUrl.contains("https://"))
+        {
+            return {
+                "text": "❌ *Error: Invalid URL Format*\n\nURL must start with `http://` or `https://`\n\nExample: `https://your-backend.example.com/api/aws_handler/`",
+                "card": {
+                    "title": "Validation Error",
+                    "theme": "prompt"
+                }
+            };
+        }
+        
+        // Test connection to backend URL (backend-agnostic health check)
+        // Health check endpoint should accept POST with service="health"
+        // Expected response format: {"success": true, "data": {"status": "healthy", "service": "...", ...}}
+        // Works for any backend that follows this response format, regardless of deployment location
+        try {
+            testBody = Map();
+            testBody.put("service", "health");
+            testBody.put("userId", userId);
+            
+                healthResponse = invokeurl [
+                url: backendUrl
+                type: POST
+                parameters: testBody.toString()
+                headers: {"Content-Type": "application/json"}
+                connection: "awscloudcommander"
+            ];
+            
+            info "Backend health check response: " + healthResponse;
+            
+            // Simple validation: Try to parse JSON response and extract expected data
+            // If parsing fails, it's not our expected server response format
+            try
+            {
+                // Try to extract expected response structure
+                // Expected: {"success": true, "data": {"status": "healthy", "service": "...", ...}}
+                responseSuccess = healthResponse.get("success");
+                healthData = healthResponse.get("data");
+                healthStatus = healthData.get("status");
+                healthService = healthData.get("service");
+                backendVersion = healthData.get("version");
+                backendRegion = healthData.get("region");
+                
+                // Validate response structure
+                if((responseSuccess == true || responseSuccess == "true" || responseSuccess == 1) && 
+                   (healthStatus == "healthy" || healthService != null && healthService != ""))
+                {
+                    // Valid response - proceed with setup
+                    setupQuery = Map();
+                    setupQuery.put("criteria", "userid==" + userId);
+                    setupRecords = zoho.cliq.getRecords("awssetup", setupQuery);
+                    
+                    setupData = Map();
+                    setupData.put("userid", userId);
+                    setupData.put("setuptype", "own_backend");
+                    setupData.put("backendurl", backendUrl);
+                    setupData.put("credentialsstored", false);
+                    
+                    if(setupRecords != null && setupRecords.get("status") == "SUCCESS" && setupRecords.get("list").size() > 0)
+                    {
+                        setupId = setupRecords.get("list").get(0).get("id");
+                        zoho.cliq.updateRecord("awssetup", setupId, setupData);
+                    }
+                    else
+                    {
+                        zoho.cliq.createRecord("awssetup", setupData);
+                    }
+                    
+                    // NOTE: Do NOT mark user as onboarded yet - they still need to provide credentials
+                    // Onboarding will be marked complete in credentialsForm.ds after credentials are verified
+                    
+                    backendVersion = ifnull(backendVersion, "unknown");
+                    backendRegion = ifnull(backendRegion, "configured on backend");
+                    
+                    // Create button to proceed to credentials form
+                    credButton = Map();
+                    credButton.put("label", "Enter Credentials");
+                    credButton.put("hint", "Provide AWS credentials for your backend");
+                    credButton.put("type", "+");
+                    credButton.put("key", "credentials_show_form");
+                    credButtonAction = Map();
+                    credButtonAction.put("type", "invoke.function");
+                    credButtonAction.put("data", {"name": "handleButton"});
+                    credButton.put("action", credButtonAction);
+                    buttonsList = List();
+                    buttonsList.add(credButton);
+                    
+                    return {
+                        "text": "✅ *Backend Connected Successfully!*\n\n*Backend URL:* " + backendUrl + "\n*Version:* " + backendVersion + "\n*Region:* " + backendRegion + "\n\n⚠️ *Next Step Required:*\nYou need to provide AWS credentials for your backend.\n\nClick below to enter your credentials →",
+                        "card": {
+                            "title": "Backend Connected",
+                            "thumbnail": "https://cdn-icons-png.flaticon.com/512/2920/2920277.png",
+                            "theme": "modern-inline"
+                        },
+                        "buttons": buttonsList
+                    };
+                }
+                else
+                {
+                    // Response structure exists but validation failed
+                    // Return error directly (Deluge doesn't support throw)
+                    return {
+                        "text": "❌ *Invalid Backend Response*\n\nThe backend URL did not return the expected response format.\n\n*Please ensure:*\n• You have deployed the AWS Cloud Commander backend server\n• The backend URL points to your API endpoint (not a UI page)\n• The `/health` endpoint responds with JSON format:\n  `{\"success\": true, \"data\": {\"status\": \"healthy\", ...}}`\n• Backend is running and accessible\n\n*Example correct URL:*\n`https://your-project.catalystserverless.com/server/aws_handler/`\n\n*Common mistakes:*\n• Using Cliq UI page URLs (e.g., `/integrations/functions/.../edit/...`)\n• Using web browser URLs instead of API endpoints\n• Missing the API path (e.g., `/server/aws_handler/`)",
+                        "card": {
+                            "title": "Invalid Backend Response",
+                            "theme": "prompt"
+                        }
+                    };
+                }
+            }
+            catch(parseError)
+            {
+                // Failed to parse JSON or extract expected data
+                // This means it's not our expected server response format
+                return {
+                    "text": "❌ *Invalid Backend Response*\n\nThe backend URL did not return the expected response format.\n\n*Please ensure:*\n• You have deployed the AWS Cloud Commander backend server\n• The backend URL points to your API endpoint (not a UI page)\n• The `/health` endpoint responds with JSON format:\n  `{\"success\": true, \"data\": {\"status\": \"healthy\", ...}}`\n• Backend is running and accessible\n\n*Example correct URL:*\n`https://your-project.catalystserverless.com/server/aws_handler/`\n\n*Common mistakes:*\n• Using Cliq UI page URLs (e.g., `/integrations/functions/.../edit/...`)\n• Using web browser URLs instead of API endpoints\n• Missing the API path (e.g., `/server/aws_handler/`)",
+                    "card": {
+                        "title": "Invalid Backend Response",
+                        "theme": "prompt"
+                    }
+                };
+            }
+    } catch(e) {
+        info "Backend connection error: " + e;
+        // Safely convert error to string (e might be an object, exception, or string)
+        // Deluge doesn't support instanceof, so we try to access Map properties
+        errorMsg = "";
+        try {
+            if(e != null)
+            {
+                // Try to access as Map first
+                try
+                {
+                    mapMessage = e.get("message");
+                    if(mapMessage != null && mapMessage != "")
+                    {
+                        errorMsg = mapMessage.toString();
+                    }
+                    else
+                    {
+                        mapError = e.get("error");
+                        if(mapError != null && mapError != "")
+                        {
+                            errorMsg = mapError.toString();
+                        }
+                        else
+                        {
+                            errorMsg = e.toString();
+                        }
+                    }
+                }
+                catch(mapError)
+                {
+                    // Not a Map, convert to string directly
+                    errorMsg = e.toString();
+                }
+            }
+            else
+            {
+                errorMsg = "Unknown error occurred";
+            }
+        }
+        catch(parseError)
+        {
+            errorMsg = "Connection failed - please check backend URL and OAuth connection";
+        }
+        
+        return {
+            "text": "❌ *Cannot Connect to Backend*\n\n*Error:* " + errorMsg + "\n\nPlease verify:\n• Backend URL is correct\n• Backend is running and accessible\n• No firewall or network restrictions\n• OAuth connection is authorized\n\n*Example URL:*\n`https://your-backend.example.com/api/aws_handler/`",
+            "card": {
+                "title": "Connection Error",
+                "theme": "prompt"
+            }
+        };
+    }
+    }
+}
+
+// ============================================================================
+// SHOW FORM - Initial display
+// ============================================================================
+
+return {
+    "type": "form",
+    "title": "Own Backend Setup",
+    "name": "backendForm",
+    "hint": "Enter the URL of your backend instance (works with Catalyst, self-hosted, or any cloud platform).",
+    "button_label": "Connect & Test",
+    "inputs": [
+        {
+            "label": "Backend URL",
+            "name": "backend_url",
+            "placeholder": "https://your-project.catalystserverless.com/server/aws_handler/",
+            "min_length": "0",
+            "max_length": "500",
+            "mandatory": true,
+            "type": "text"
+        }
+    ],
+    "action": {
+        "type": "invoke.function",
+        "name": "backendForm"
+    }
+};
+

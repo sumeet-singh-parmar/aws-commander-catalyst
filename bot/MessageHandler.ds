@@ -1,0 +1,585 @@
+// ============================================================================
+// AWS Cloud Commander - Bot Message Handler
+// ============================================================================
+// Purpose: Processes all direct messages sent to the bot
+//
+// This handler is triggered when user sends any message directly to the bot
+// (not slash commands, which are handled by ExecutionHandler)
+//
+// Flow:
+//   1. Parses message text and detects intent (greeting, help, commands, etc.)
+//   2. Provides contextual responses based on message content
+//   3. Guides users to use slash commands (/aws help) for actions
+//   4. Shows setup prompt if user hasn't completed setup
+//
+// Key Features:
+//   - Responds to greetings (hi, hello, hey)
+//   - Provides help text for common questions
+//   - Guides users to Bot Menu for settings/notifications
+//   - Shows command reference when asked
+//   - Prompts for setup if credentials not configured
+//
+// Note: This handler returns text-only responses (no buttons) to keep it simple
+// ============================================================================
+
+// Get message and user info
+userMessage = message;
+if(userMessage == null || userMessage == "")
+{
+    userMessage = "";
+    messageLower = "";
+}
+else
+{
+    userMessage = userMessage.trim();
+    messageLower = userMessage.toLowerCase();
+}
+
+userName = "there";
+userId = "";
+if(user != null)
+{
+    userName = ifnull(user.get("first_name"), ifnull(user.get("name"), "there"));
+    userId = ifnull(user.get("id"), "");
+}
+
+// ======================== CHECK ONBOARDING STATUS ========================
+// Allow help and empty message without onboarding
+isOnboarded = false;
+skipOnboardCheck = false;
+
+// Skip onboarding check for help and empty messages only
+if(messageLower == "" || messageLower == "help" || messageLower == "?" || messageLower == "commands" || messageLower.contains("what can you do"))
+{
+    skipOnboardCheck = true;
+}
+
+if(!skipOnboardCheck && userId != "")
+{
+    prefsQuery = Map();
+    prefsQuery.put("criteria", "userid==" + userId);
+    prefsRecords = zoho.cliq.getRecords("awsprefs", prefsQuery);
+
+    if(prefsRecords != null && prefsRecords.get("status") == "SUCCESS")
+    {
+        prefsList = prefsRecords.get("list");
+        if(prefsList != null && prefsList.size() > 0)
+        {
+            prefs = prefsList.get(0);
+            isOnboarded = ifnull(prefs.get("onboarded"), "FALSE") == "TRUE";
+        }
+    }
+
+    // If not onboarded, prompt them
+    if(!isOnboarded)
+    {
+        onboardMsg = "*Hey " + userName + "!* Welcome to AWS Cloud Commander!\n\n";
+        onboardMsg = onboardMsg + "Before we get started, please complete the onboarding process.\n\n";
+        onboardMsg = onboardMsg + "*Use:* Bot Menu → Reset Setup\n\n";
+        onboardMsg = onboardMsg + "This will:\n";
+        onboardMsg = onboardMsg + "• Explain how the extension works\n";
+        onboardMsg = onboardMsg + "• Help you configure settings & consents\n";
+        onboardMsg = onboardMsg + "• Unlock all AWS commands (including AI!)\n\n";
+        onboardMsg = onboardMsg + "📚 Type `/aws help` to see all available commands.";
+        return {
+            "text": onboardMsg,
+            "card": {"theme": "modern-inline"}
+        };
+    }
+}
+
+// ======================== EMPTY MESSAGE ========================
+if(messageLower == "" || messageLower == null)
+{
+    return {
+        "text": "Hey " + userName + "! I'm your AWS assistant.\n\n*Quick Commands:*\n• `/aws` - Open dashboard\n• `/aws ec2` - EC2 instances\n• `/aws s3` - S3 buckets\n• `/aws lambda` - Lambda functions\n• `/aws rds` - RDS databases\n• `/aws cost` - Cost reports\n• `/aws alarms` - CloudWatch alarms\n• `/aws logs` - CloudWatch logs\n• `/aws help` - All commands\n\n🤖 *Try AI:* `/aws ai <your question>` - Ask anything about AWS!\n\nOr just tell me what you need!",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== GREETINGS ========================
+if(messageLower == "hi" || messageLower == "hello" || messageLower == "hey" || messageLower == "hola" || messageLower == "yo" || messageLower == "sup" || messageLower == "hii" || messageLower == "hiii" || messageLower == "heya" || messageLower.startsWith("good morning") || messageLower.startsWith("good afternoon") || messageLower.startsWith("good evening"))
+{
+    greetText = "Hey " + userName + "! How can I help you today?\n\n";
+    greetText = greetText + "*Quick Actions:*\n";
+    greetText = greetText + "• `/aws` - Open dashboard\n";
+    greetText = greetText + "• `/aws ec2` - Manage instances\n";
+    greetText = greetText + "• `/aws cost` - Check spending\n";
+    greetText = greetText + "• `/aws alarms` - View alarms\n\n";
+    greetText = greetText + "*Need to share files?* 📦\n";
+    greetText = greetText + "• `/aws s3` - Browse your buckets\n";
+    greetText = greetText + "• Upload files & get instant download links!\n\n";
+    greetText = greetText + "🤖 *Try AI:* `/aws ai <question>` - Ask anything about AWS!\n\n";
+    greetText = greetText + "📚 `/aws help` for all commands";
+    return {
+        "text": greetText,
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== HELP ========================
+if(messageLower == "help" || messageLower == "?" || messageLower == "commands" || messageLower.contains("what can you do"))
+{
+    helpText = "*☁️ AWS Cloud Commander - Complete Command Reference*\n\n";
+
+    // EC2 Commands
+    helpText = helpText + "*🖥️ EC2 INSTANCES*\n";
+    helpText = helpText + "• `/aws ec2` - List all instances\n";
+    helpText = helpText + "• `/aws ec2 <instance-id>` - Instance details (e.g., `i-0abc123`)\n";
+    helpText = helpText + "• `/aws ec2 start <instance-id>` - Start stopped instance\n";
+    helpText = helpText + "• `/aws ec2 stop <instance-id>` - Stop running instance\n";
+    helpText = helpText + "• `/aws ec2 reboot <instance-id>` - Reboot instance\n";
+    helpText = helpText + "• `/aws ec2 status <instance-id>` - Check status\n";
+    helpText = helpText + "• `/aws ec2 metrics <instance-id>` - CPU/network metrics\n";
+    helpText = helpText + "• `/aws ec2 summary` - Counts by state\n";
+    helpText = helpText + "• `/aws ec2 sg` - Security Groups list\n";
+    helpText = helpText + "• `/aws ec2 vpcs` - VPCs list\n\n";
+
+    // S3 Commands
+    helpText = helpText + "*📦 S3 STORAGE*\n";
+    helpText = helpText + "• `/aws s3` - List all buckets\n";
+    helpText = helpText + "• `/aws s3 create` - Create bucket form\n";
+    helpText = helpText + "• `/aws s3 browse <bucket-name>` - Browse contents\n";
+    helpText = helpText + "• `/aws s3 search <bucket> <term>` - Search files\n";
+    helpText = helpText + "• `/aws s3 download <bucket> <key>` - Get download link\n\n";
+
+    // Lambda Commands
+    helpText = helpText + "*⚡ LAMBDA*\n";
+    helpText = helpText + "• `/aws lambda` - List functions\n";
+    helpText = helpText + "• `/aws lambda summary` - Stats overview\n";
+    helpText = helpText + "• `/aws lambda invoke <name>` - Invoke function\n\n";
+
+    // RDS Commands
+    helpText = helpText + "*🗄️ RDS DATABASES*\n";
+    helpText = helpText + "• `/aws rds` - List databases\n";
+    helpText = helpText + "• `/aws rds start <db-id>` - Start database\n";
+    helpText = helpText + "• `/aws rds stop <db-id>` - Stop database\n";
+    helpText = helpText + "• `/aws rds clusters` - Aurora clusters\n\n";
+
+    // SNS Commands
+    helpText = helpText + "*📨 SNS MESSAGING*\n";
+    helpText = helpText + "• `/aws sns` - List topics\n";
+    helpText = helpText + "• `/aws sns subs` - Subscriptions\n";
+    helpText = helpText + "• `/aws sns publish <topic-arn>` - Publish message\n\n";
+
+    // Monitoring
+    helpText = helpText + "*🔔 CLOUDWATCH*\n";
+    helpText = helpText + "• `/aws alarms` - All alarms\n";
+    helpText = helpText + "• `/aws alarms active` - Triggered only\n";
+    helpText = helpText + "• `/aws alarms history` - State history\n";
+    helpText = helpText + "• `/aws logs` - Log groups\n";
+    helpText = helpText + "• `/aws logs <group>` - View logs\n";
+    helpText = helpText + "• `/aws logs <group> errors` - Search errors\n";
+    helpText = helpText + "• `/aws logs filter <group> <pattern>` - Search\n\n";
+
+    // Cost
+    helpText = helpText + "*💰 COST EXPLORER* (needs consent)\n";
+    helpText = helpText + "• `/aws cost` - Today's costs\n";
+    helpText = helpText + "• `/aws cost week` - Last 7 days\n";
+    helpText = helpText + "• `/aws cost month` - Month-to-date\n";
+    helpText = helpText + "• `/aws cost forecast` - Prediction\n";
+    helpText = helpText + "• `/aws cost trend` - Trends\n\n";
+
+    // IAM
+    helpText = helpText + "*🔐 IAM SECURITY*\n";
+    helpText = helpText + "• `/aws iam` - Overview\n";
+    helpText = helpText + "• `/aws iam users` - IAM users\n";
+    helpText = helpText + "• `/aws iam roles` - IAM roles\n";
+    helpText = helpText + "• `/aws iam security` - Security audit\n\n";
+
+    // Admin & Settings
+    helpText = helpText + "*⚙️ SETTINGS*\n";
+    helpText = helpText + "• Settings - Access via Bot Menu (⚙️ icon)\n";
+    helpText = helpText + "• `/aws consent` - View consent status\n";
+    helpText = helpText + "• `/aws consent cost|ai|lambda|sns` - Toggle consent\n";
+    helpText = helpText + "• `/aws permissions` - Check IAM perms\n";
+    helpText = helpText + "• `/aws status` - Backend health\n";
+    helpText = helpText + "• `/aws incidents` - View incidents\n";
+    helpText = helpText + "• `/aws ai <question>` - Ask AI (needs consent)\n\n";
+
+    helpText = helpText + "💡 Instance IDs: `i-0abc123...` | Bucket names: lowercase, no spaces";
+
+    return {"text": helpText, "card": {"theme": "modern-inline"}};
+}
+
+// ======================== EC2 KEYWORDS ========================
+if(messageLower.contains("ec2") || messageLower.contains("instance") || messageLower.contains("server") || messageLower.contains("vm") || messageLower.contains("virtual machine"))
+{
+    if(messageLower.contains("start"))
+    {
+        return {
+            "text": "*Starting EC2 Instances*\n\n1. First list your instances:\n   `/aws ec2`\n\n2. Then start one:\n   `/aws ec2 start i-0123456789abcdef`\n\nReplace the ID with your actual instance ID.",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    if(messageLower.contains("stop"))
+    {
+        return {
+            "text": "*Stopping EC2 Instances*\n\n1. First list your instances:\n   `/aws ec2`\n\n2. Then stop one:\n   `/aws ec2 stop i-0123456789abcdef`\n\nReplace the ID with your actual instance ID.",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    if(messageLower.contains("reboot") || messageLower.contains("restart"))
+    {
+        return {
+            "text": "*Rebooting EC2 Instances*\n\n1. First list your instances:\n   `/aws ec2`\n\n2. Then reboot one:\n   `/aws ec2 reboot i-0123456789abcdef`\n\nReplace the ID with your actual instance ID.",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    if(messageLower.contains("metric") || messageLower.contains("cpu") || messageLower.contains("memory"))
+    {
+        return {
+            "text": "*EC2 Instance Metrics*\n\nView CPU, network, and disk metrics:\n   `/aws ec2 metrics i-0123456789abcdef`\n\nFirst get instance IDs with `/aws ec2`",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    if(messageLower.contains("summary") || messageLower.contains("count") || messageLower.contains("how many"))
+    {
+        return {
+            "text": "*EC2 Summary*\n\nGet instance counts by state:\n   `/aws ec2 summary`\n\nShows running, stopped, and total instances.",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    return {
+        "text": "*EC2 Instance Management*\n\n*Commands:*\n• `/aws ec2` - List all instances\n• `/aws ec2 summary` - Instance counts by state\n• `/aws ec2 start <id>` - Start instance\n• `/aws ec2 stop <id>` - Stop instance\n• `/aws ec2 reboot <id>` - Reboot instance\n• `/aws ec2 metrics <id>` - View CPU/network metrics\n• `/aws ec2 sg` - Security groups\n• `/aws ec2 vpcs` - VPCs",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== S3 KEYWORDS ========================
+if(messageLower.contains("s3") || messageLower.contains("bucket") || messageLower.contains("storage") || messageLower.contains("file") || messageLower.contains("object"))
+{
+    if(messageLower.contains("create") || messageLower.contains("new") || messageLower.contains("make"))
+    {
+        return {
+            "text": "*Creating S3 Buckets*\n\nUse: `/aws s3 create`\n\nThis opens a form to create a new bucket with:\n• Bucket name\n• Region selection\n• Access settings",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    if(messageLower.contains("browse") || messageLower.contains("view") || messageLower.contains("open") || messageLower.contains("content"))
+    {
+        return {
+            "text": "*Browsing S3 Buckets*\n\n1. List buckets: `/aws s3`\n2. Browse contents: `/aws s3 browse my-bucket-name`\n\nYou can navigate folders and download files.",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    if(messageLower.contains("search") || messageLower.contains("find"))
+    {
+        return {
+            "text": "*Searching S3*\n\nSearch for buckets:\n   `/aws s3 search <term>`\n\nOr list all: `/aws s3`",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    return {
+        "text": "*S3 Storage Management*\n\n*Commands:*\n• `/aws s3` - List all buckets\n• `/aws s3 create` - Create new bucket\n• `/aws s3 browse <bucket>` - Browse bucket contents\n• `/aws s3 search <term>` - Search buckets\n• `/aws s3 download <bucket> <key>` - Download file",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== LAMBDA KEYWORDS ========================
+if(messageLower.contains("lambda") || messageLower.contains("function") || messageLower.contains("serverless"))
+{
+    if(messageLower.contains("invoke") || messageLower.contains("run") || messageLower.contains("execute") || messageLower.contains("trigger"))
+    {
+        return {
+            "text": "*Invoking Lambda Functions*\n\n1. List functions: `/aws lambda`\n2. Invoke: `/aws lambda invoke my-function-name`\n\nYou can also pass a JSON payload.",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    if(messageLower.contains("metric") || messageLower.contains("stats"))
+    {
+        return {
+            "text": "*Lambda Metrics*\n\nView invocation stats:\n   `/aws lambda metrics my-function-name`\n\nShows invocations, errors, duration.",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    return {
+        "text": "*Lambda Functions*\n\n*Commands:*\n• `/aws lambda` - List all functions\n• `/aws lambda summary` - Function summary\n• `/aws lambda invoke <name>` - Invoke function\n• `/aws lambda metrics <name>` - View metrics",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== RDS KEYWORDS ========================
+if(messageLower.contains("rds") || messageLower.contains("database") || messageLower.contains("db") || messageLower.contains("mysql") || messageLower.contains("postgres") || messageLower.contains("aurora"))
+{
+    if(messageLower.contains("cluster"))
+    {
+        return {
+            "text": "*Aurora Clusters*\n\nView Aurora DB clusters:\n   `/aws rds clusters`\n\nShows cluster status, engine, and endpoints.",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    if(messageLower.contains("start"))
+    {
+        return {
+            "text": "*Starting RDS Databases*\n\n1. List databases: `/aws rds`\n2. Start one: `/aws rds start my-db-identifier`",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    if(messageLower.contains("stop"))
+    {
+        return {
+            "text": "*Stopping RDS Databases*\n\n1. List databases: `/aws rds`\n2. Stop one: `/aws rds stop my-db-identifier`",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    return {
+        "text": "*RDS Database Management*\n\n*Commands:*\n• `/aws rds` - List all RDS instances\n• `/aws rds clusters` - Aurora clusters\n• `/aws rds start <id>` - Start database\n• `/aws rds stop <id>` - Stop database",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== SNS KEYWORDS ========================
+if(messageLower.contains("sns") || messageLower.contains("topic") || messageLower.contains("notification") || messageLower.contains("publish") || messageLower.contains("subscribe"))
+{
+    if(messageLower.contains("publish") || messageLower.contains("send") || messageLower.contains("message"))
+    {
+        return {
+            "text": "*Publishing to SNS*\n\nSend a message to a topic:\n   `/aws sns publish`\n\nThis opens a form to select topic and enter message.",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    if(messageLower.contains("sub"))
+    {
+        return {
+            "text": "*SNS Subscriptions*\n\nView all subscriptions:\n   `/aws sns subs`\n\nShows endpoint, protocol, and status.",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    return {
+        "text": "*SNS - Simple Notification Service*\n\n*Commands:*\n• `/aws sns` - List all topics\n• `/aws sns subs` - List subscriptions\n• `/aws sns publish` - Publish message to topic",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== ALARM KEYWORDS ========================
+if(messageLower.contains("alarm") || messageLower.contains("alert") || messageLower.contains("monitor") || messageLower.contains("cloudwatch"))
+{
+    if(messageLower.contains("active") || messageLower.contains("firing") || messageLower.contains("triggered"))
+    {
+        return {
+            "text": "*Active Alarms*\n\nView only triggered alarms:\n   `/aws alarms active`\n\nShows alarms currently in ALARM state.",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    if(messageLower.contains("history"))
+    {
+        return {
+            "text": "*Alarm History*\n\nView alarm state changes:\n   `/aws alarms history`\n\nShows recent state transitions.",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    return {
+        "text": "*CloudWatch Alarms*\n\n*Commands:*\n• `/aws alarms` - List all alarms\n• `/aws alarms active` - Active/triggered alarms only\n• `/aws alarms history` - Alarm history\n\nSet up notifications via Bot Menu → Settings.",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== LOG KEYWORDS ========================
+if(messageLower.contains("log"))
+{
+    if(messageLower.contains("error") || messageLower.contains("fail"))
+    {
+        return {
+            "text": "*CloudWatch Log Errors*\n\nFind recent errors:\n   `/aws logs errors`\n\nSearches for ERROR patterns across log groups.",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    if(messageLower.contains("filter") || messageLower.contains("search"))
+    {
+        return {
+            "text": "*Filtering Logs*\n\nSearch with a pattern:\n   `/aws logs filter <pattern>`\n\nExample: `/aws logs filter \"Exception\"`",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    return {
+        "text": "*CloudWatch Logs*\n\n*Commands:*\n• `/aws logs` - List all log groups\n• `/aws logs errors` - Find recent errors\n• `/aws logs filter <pattern>` - Filter by pattern",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== IAM / SECURITY KEYWORDS ========================
+if(messageLower.contains("iam") || messageLower.contains("security") || messageLower.contains("permission") || messageLower.contains("user") || messageLower.contains("role") || messageLower.contains("policy"))
+{
+    if(messageLower.contains("user"))
+    {
+        return {
+            "text": "*IAM Users*\n\nList all IAM users:\n   `/aws iam users`\n\nShows username, creation date, and last activity.",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    if(messageLower.contains("role"))
+    {
+        return {
+            "text": "*IAM Roles*\n\nList all IAM roles:\n   `/aws iam roles`\n\nShows role name, ARN, and description.",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    if(messageLower.contains("audit") || messageLower.contains("check") || messageLower.contains("scan"))
+    {
+        return {
+            "text": "*Security Audit*\n\nRun a security check:\n   `/aws iam security`\n\nChecks for:\n• MFA status\n• Old access keys\n• Unused credentials\n• Policy issues",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    return {
+        "text": "*IAM Security*\n\n*Commands:*\n• `/aws iam` - IAM overview\n• `/aws iam users` - List IAM users\n• `/aws iam roles` - List IAM roles\n• `/aws iam security` - Run security audit\n• `/aws permissions` - Check your IAM permissions",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== COST KEYWORDS ========================
+if(messageLower.contains("cost") || messageLower.contains("spend") || messageLower.contains("bill") || messageLower.contains("money") || messageLower.contains("expense") || messageLower.contains("price") || messageLower.contains("budget"))
+{
+    if(messageLower.contains("today"))
+    {
+        return {
+            "text": "*Today's Costs*\n\nView today's spending:\n   `/aws cost`\n\nShows cost breakdown by service.",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    if(messageLower.contains("week"))
+    {
+        return {
+            "text": "*Weekly Costs*\n\nView last 7 days:\n   `/aws cost week`\n\nShows daily breakdown and trends.",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    if(messageLower.contains("month"))
+    {
+        return {
+            "text": "*Monthly Costs*\n\nView month-to-date:\n   `/aws cost month`\n\nShows breakdown by service.",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    if(messageLower.contains("forecast") || messageLower.contains("predict") || messageLower.contains("estimate"))
+    {
+        return {
+            "text": "*Cost Forecast*\n\nPredict end-of-month costs:\n   `/aws cost forecast`\n\nBased on current usage patterns.",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    if(messageLower.contains("trend"))
+    {
+        return {
+            "text": "*Cost Trends*\n\nView spending over time:\n   `/aws cost trend`\n\nShows historical patterns.",
+            "card": {"theme": "modern-inline"}
+        };
+    }
+    return {
+        "text": "*AWS Cost Reports*\n\n*Commands:*\n• `/aws cost` - Today's costs\n• `/aws cost week` - Last 7 days\n• `/aws cost month` - Month-to-date\n• `/aws cost forecast` - End-of-month prediction\n• `/aws cost trend` - Historical trends\n\n*Note:* Cost Explorer charges $0.01/request.\nEnable via Bot Menu → Settings first.",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== AI KEYWORDS ========================
+if(messageLower.contains("ai") || messageLower.contains("claude") || messageLower.contains("bedrock") || messageLower.contains("ask") || messageLower.contains("question"))
+{
+    return {
+        "text": "*AI Assistant (Powered by AWS Bedrock)*\n\nAsk questions about your AWS:\n   `/aws ai <your question>`\n\n*Examples:*\n• `/aws ai how can I reduce my AWS costs?`\n• `/aws ai what EC2 instances are running?`\n• `/aws ai explain my S3 bucket policies`\n• `/aws ai how do I secure my infrastructure?`\n\n*Note:* Uses AWS Bedrock (~$0.01-0.15/query).\nEnable via Bot Menu → Settings first.",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== SETTINGS KEYWORDS ========================
+if(messageLower.contains("setting") || messageLower.contains("config") || messageLower.contains("preference") || messageLower.contains("region") || messageLower.contains("setup"))
+{
+    return {
+        "text": "*Settings & Configuration*\n\nOpen settings:\n   Bot Menu → Settings (⚙️ icon)\n\n*You can configure:*\n• Default AWS region\n• Enable Cost Explorer (paid API)\n• Enable AI Assistant (paid API)\n• Notification channel\n• Alert preferences\n• Daily/weekly report schedule",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== STATUS / HEALTH KEYWORDS ========================
+if(messageLower.contains("status") || messageLower.contains("health") || messageLower.contains("check") || messageLower.contains("working"))
+{
+    return {
+        "text": "*System Status*\n\n*Commands:*\n• `/aws status` - Backend health check\n• `/aws permissions` - Check your IAM permissions\n\nVerifies connection to AWS and API status.",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== DASHBOARD KEYWORDS ========================
+if(messageLower.contains("dashboard") || messageLower.contains("overview") || messageLower.contains("summary") || messageLower.contains("home"))
+{
+    return {
+        "text": "*AWS Dashboard*\n\nOpen the dashboard:\n   `/aws`\n\n*Shows:*\n• Resource overview\n• Instance counts\n• Active alarms\n• Quick actions\n• Recent cost summary",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== INCIDENTS KEYWORDS ========================
+if(messageLower.contains("incident") || messageLower.contains("outage") || messageLower.contains("issue") || messageLower.contains("problem"))
+{
+    return {
+        "text": "*Incidents*\n\nView tracked incidents:\n   `/aws incidents`\n\nShows ongoing issues and their status.",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== PERMISSIONS KEYWORDS ========================
+if(messageLower.contains("permission") || messageLower.contains("access") || messageLower.contains("allowed"))
+{
+    return {
+        "text": "*IAM Permissions Check*\n\nVerify what you can do:\n   `/aws permissions`\n\nChecks if your IAM user/role has access to various AWS services.",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== CONSENT KEYWORDS ========================
+if(messageLower.contains("consent") || messageLower.contains("enable") || messageLower.contains("activate"))
+{
+    return {
+        "text": "*Enabling Features*\n\nSome features require consent due to costs:\n\n*Cost Explorer:* $0.01 per API request\n*AI Assistant:* $0.01-0.15 per query\n\nEnable them via Bot Menu → Settings or:\n   `/aws consent cost` - Enable Cost Explorer\n   `/aws consent ai` - Enable AI Assistant",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== THANK YOU ========================
+if(messageLower.contains("thank") || messageLower == "ty" || messageLower == "thx")
+{
+    return {
+        "text": "You're welcome, " + userName + "! Happy to help. Let me know if you need anything else!\n\nQuick tip: Use `/aws help` for full command list.",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== HOW ARE YOU ========================
+if(messageLower.contains("how are you") || messageLower == "wassup" || messageLower == "whats up" || messageLower == "what's up")
+{
+    return {
+        "text": "I'm doing great, " + userName + "! Just keeping an eye on your AWS resources.\n\nNeed anything? Here are some ideas:\n• `/aws ec2` - Check your instances\n• `/aws cost` - See your spending\n• `/aws alarms` - Check for alerts",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== BYE ========================
+if(messageLower == "bye" || messageLower == "goodbye" || messageLower == "later" || messageLower == "cya" || messageLower == "see ya")
+{
+    return {
+        "text": "See ya, " + userName + "! I'll keep watching your AWS. Ping me anytime!",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== JOKES ========================
+if(messageLower.contains("joke") || messageLower.contains("funny"))
+{
+    jokes = List();
+    jokes.add("Why do programmers prefer dark mode? Because light attracts bugs!");
+    jokes.add("There are only 10 types of people: those who understand binary and those who don't.");
+    jokes.add("Why did the developer go broke? Because he used up all his cache!");
+    jokes.add("A SQL query walks into a bar, walks up to two tables and asks... 'Can I join you?'");
+    jokes.add("Why did the cloud break up with the server? Because it needed more space!");
+    randomIndex = zoho.currenttime.getSeconds() % jokes.size();
+    return {
+        "text": jokes.get(randomIndex) + "\n\nNeed help with AWS? Try `/aws help`",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== DEFAULT ========================
+return {
+    "text": "Hey " + userName + "! I'm not sure what you mean, but I can help with AWS!\n\n*Try these:*\n• `/aws` - Dashboard\n• `/aws ec2` - EC2 instances\n• `/aws s3` - S3 buckets\n• `/aws lambda` - Lambda functions\n• `/aws rds` - RDS databases\n• `/aws cost` - Cost reports\n• `/aws alarms` - CloudWatch alarms\n• `/aws help` - Full command list\n\n🤖 *Or ask the AI:* `/aws ai <your question>`\nExample: `/aws ai how can I reduce EC2 costs?`",
+    "card": {"theme": "modern-inline"}
+};

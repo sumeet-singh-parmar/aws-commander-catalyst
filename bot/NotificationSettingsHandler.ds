@@ -1,0 +1,250 @@
+// ============================================================================
+// AWS Cloud Commander - Notification Settings Bot Menu Action Handler
+// ============================================================================
+// Purpose: Configures per-type notification channels and enable/disable flags
+//
+// This handler is triggered when user clicks "Notification Settings" in the Bot Menu
+// Shows form with current notification settings loaded from awsnotifications table
+//
+// Notification Types Managed:
+//   - EC2 (instance start/stop/reboot events)
+//   - S3 (bucket create/delete events)
+//   - Alarms (CloudWatch alarm state changes)
+//   - SNS (message publish events)
+//   - Lambda (function invocation events)
+//   - RDS (database instance events)
+//   - Daily Cost (scheduled daily cost reports)
+//   - Weekly Summary (scheduled weekly infrastructure summaries)
+//
+// For each type:
+//   - Enabled toggle (TRUE/FALSE stored as text)
+//   - Channel selector (channel name stored as text)
+//
+// Settings are stored in awsnotifications table with composite primary key:
+//   (userid, notificationtype) ensures one record per user per notification type
+//
+// Form submission is processed by handleForm.ds (awsNotificationSettingsForm)
+// ============================================================================
+
+// Get user info
+userId = "";
+userName = "Unknown";
+if(user != null)
+{
+	userId = ifnull(user.get("id"),"");
+	userName = ifnull(user.get("first_name"),ifnull(user.get("name"),"Unknown"));
+}
+
+// Load current notification settings from awsnotifications table
+// Notification types: ec2, s3, alarms, sns, lambda, rds, daily_cost, weekly_summary
+notifTypes = List();
+notifTypes.add("ec2");
+notifTypes.add("s3");
+notifTypes.add("alarms");
+notifTypes.add("sns");
+notifTypes.add("lambda");
+notifTypes.add("rds");
+notifTypes.add("daily_cost");
+notifTypes.add("weekly_summary");
+
+// Fetch current settings for each notification type
+// Query all records for this user first, then filter by notificationtype
+// This avoids issues with AND queries in criteria
+currentSettings = Map();
+notifQuery = Map();
+notifQuery.put("criteria","userid==" + userId.toString());
+allUserRecords = zoho.cliq.getRecords("awsnotifications",notifQuery);
+
+// Process all records and group by notificationtype
+if(allUserRecords != null && allUserRecords.get("status") == "SUCCESS")
+{
+	notifList = allUserRecords.get("list");
+	if(notifList != null && notifList.size() > 0)
+	{
+		for each  notifRecord in notifList
+		{
+			if(notifRecord != null)
+			{
+				// Check both userid AND notificationtype match (composite primary key)
+				recUserId = ifnull(notifRecord.get("userid"),"").toString();
+				recNotifType = ifnull(notifRecord.get("notificationtype"),"");
+				if(recUserId == userId.toString() && recNotifType != "")
+				{
+					setting = Map();
+					setting.put("enabled",ifnull(notifRecord.get("enabled"),"FALSE"));
+					// Extract channel - ensure it's a string, not an object
+					channelRaw = ifnull(notifRecord.get("channel"),"");
+					channelStr = "";
+					if(channelRaw != null)
+					{
+						channelStr = channelRaw.toString();
+						// If it's stored as an object string, try to extract
+						if(channelStr.startsWith("{"))
+						{
+							// Try to parse as JSON object and extract unique_name
+							try
+							{
+								channelObj = channelRaw;
+								if(channelObj.get("unique_name") != null)
+								{
+									channelStr = channelObj.get("unique_name").toString();
+								}
+								else if(channelObj.get("name") != null)
+								{
+									channelStr = channelObj.get("name").toString();
+									if(channelStr.startsWith("#"))
+									{
+										channelStr = channelStr.subString(1);
+									}
+								}
+								else
+								{
+									channelStr = "";
+								}
+							}
+							catch(e)
+							{
+								channelStr = "";
+							}
+						}
+					}
+					setting.put("channel",channelStr);
+					currentSettings.put(recNotifType,setting);
+				}
+			}
+		}
+	}
+}
+
+// Initialize defaults for any notification types not found
+for each  notifType in notifTypes
+{
+	if(currentSettings.get(notifType) == null)
+	{
+		setting = Map();
+		setting.put("enabled","FALSE");
+		setting.put("channel","");
+		currentSettings.put(notifType,setting);
+	}
+}
+
+// Get fallback channel from awsprefs for backward compatibility display
+prefsQuery = Map();
+prefsQuery.put("criteria","userid==" + userId);
+prefsRecords = zoho.cliq.getRecords("awsprefs",prefsQuery);
+fallbackChannel = "";
+if(prefsRecords != null && prefsRecords.get("status") == "SUCCESS")
+{
+	prefsList = prefsRecords.get("list");
+	if(prefsList != null && prefsList.size() > 0)
+	{
+		prefs = prefsList.get(0);
+		fallbackChannel = ifnull(prefs.get("channel"),"");
+	}
+}
+
+// Build form inputs
+formInputs = List();
+
+// EC2 Notifications
+ec2Setting = currentSettings.get("ec2");
+ec2Enabled = ifnull(ec2Setting.get("enabled"),"FALSE");
+ec2Channel = ifnull(ec2Setting.get("channel"),"");
+if(ec2Channel == "")
+{
+	ec2Channel = fallbackChannel;
+}
+formInputs.add({"type":"toggle","name":"ec2_enabled","label":"🖥️ EC2 Instance Events","value":(ec2Enabled == "TRUE" || ec2Enabled == true || ec2Enabled == "true" || ec2Enabled == 1 || ec2Enabled == "1")});
+formInputs.add({"type":"native_select","name":"ec2_channel","label":"EC2 Channel","placeholder":"Select channel","hint":"Current: " + ifnull(ec2Channel,"Not set"),"mandatory":false,"data_source":"channels","value":ec2Channel});
+
+// S3 Notifications
+s3Setting = currentSettings.get("s3");
+s3Enabled = ifnull(s3Setting.get("enabled"),"FALSE");
+s3Channel = ifnull(s3Setting.get("channel"),"");
+if(s3Channel == "")
+{
+	s3Channel = fallbackChannel;
+}
+formInputs.add({"type":"toggle","name":"s3_enabled","label":"📦 S3 Bucket Events","value":(s3Enabled == "TRUE" || s3Enabled == true || s3Enabled == "true" || s3Enabled == 1 || s3Enabled == "1")});
+formInputs.add({"type":"native_select","name":"s3_channel","label":"S3 Channel","placeholder":"Select channel","hint":"Current: " + ifnull(s3Channel,"Not set"),"mandatory":false,"data_source":"channels","value":s3Channel});
+
+// CloudWatch Alarms Notifications
+alarmsSetting = currentSettings.get("alarms");
+alarmsEnabled = ifnull(alarmsSetting.get("enabled"),"FALSE");
+alarmsChannel = ifnull(alarmsSetting.get("channel"),"");
+if(alarmsChannel == "")
+{
+	alarmsChannel = fallbackChannel;
+}
+formInputs.add({"type":"toggle","name":"alarms_enabled","label":"🔔 CloudWatch Alarms","value":(alarmsEnabled == "TRUE" || alarmsEnabled == true || alarmsEnabled == "true" || alarmsEnabled == 1 || alarmsEnabled == "1")});
+formInputs.add({"type":"native_select","name":"alarms_channel","label":"Alarms Channel","placeholder":"Select channel","hint":"Current: " + ifnull(alarmsChannel,"Not set"),"mandatory":false,"data_source":"channels","value":alarmsChannel});
+
+// SNS Notifications
+snsSetting = currentSettings.get("sns");
+snsEnabled = ifnull(snsSetting.get("enabled"),"FALSE");
+snsChannel = ifnull(snsSetting.get("channel"),"");
+if(snsChannel == "")
+{
+	snsChannel = fallbackChannel;
+}
+formInputs.add({"type":"toggle","name":"sns_enabled","label":"📢 SNS Messages","value":(snsEnabled == "TRUE" || snsEnabled == true || snsEnabled == "true" || snsEnabled == 1 || snsEnabled == "1")});
+formInputs.add({"type":"native_select","name":"sns_channel","label":"SNS Channel","placeholder":"Select channel","hint":"Current: " + ifnull(snsChannel,"Not set"),"mandatory":false,"data_source":"channels","value":snsChannel});
+
+// Lambda Notifications
+lambdaSetting = currentSettings.get("lambda");
+lambdaEnabled = ifnull(lambdaSetting.get("enabled"),"FALSE");
+lambdaChannel = ifnull(lambdaSetting.get("channel"),"");
+if(lambdaChannel == "")
+{
+	lambdaChannel = fallbackChannel;
+}
+formInputs.add({"type":"toggle","name":"lambda_enabled","label":"⚡ Lambda Functions","value":(lambdaEnabled == "TRUE" || lambdaEnabled == true || lambdaEnabled == "true" || lambdaEnabled == 1 || lambdaEnabled == "1")});
+formInputs.add({"type":"native_select","name":"lambda_channel","label":"Lambda Channel","placeholder":"Select channel","hint":"Current: " + ifnull(lambdaChannel,"Not set"),"mandatory":false,"data_source":"channels","value":lambdaChannel});
+
+// RDS Notifications
+rdsSetting = currentSettings.get("rds");
+rdsEnabled = ifnull(rdsSetting.get("enabled"),"FALSE");
+rdsChannel = ifnull(rdsSetting.get("channel"),"");
+if(rdsChannel == "")
+{
+	rdsChannel = fallbackChannel;
+}
+formInputs.add({"type":"toggle","name":"rds_enabled","label":"🗄️ RDS Instances","value":(rdsEnabled == "TRUE" || rdsEnabled == true || rdsEnabled == "true" || rdsEnabled == 1 || rdsEnabled == "1")});
+formInputs.add({"type":"native_select","name":"rds_channel","label":"RDS Channel","placeholder":"Select channel","hint":"Current: " + ifnull(rdsChannel,"Not set"),"mandatory":false,"data_source":"channels","value":rdsChannel});
+
+// Daily Cost Report
+dailyCostSetting = currentSettings.get("daily_cost");
+dailyCostEnabled = ifnull(dailyCostSetting.get("enabled"),"FALSE");
+dailyCostChannel = ifnull(dailyCostSetting.get("channel"),"");
+if(dailyCostChannel == "")
+{
+	dailyCostChannel = fallbackChannel;
+}
+formInputs.add({"type":"toggle","name":"daily_cost_enabled","label":"💰 Daily Cost Report","value":(dailyCostEnabled == "TRUE" || dailyCostEnabled == true || dailyCostEnabled == "true" || dailyCostEnabled == 1 || dailyCostEnabled == "1")});
+formInputs.add({"type":"native_select","name":"daily_cost_channel","label":"Daily Cost Channel","placeholder":"Select channel","hint":"Current: " + ifnull(dailyCostChannel,"Not set"),"mandatory":false,"data_source":"channels","value":dailyCostChannel});
+
+// Weekly Summary
+weeklySummarySetting = currentSettings.get("weekly_summary");
+weeklySummaryEnabled = ifnull(weeklySummarySetting.get("enabled"),"FALSE");
+weeklySummaryChannel = ifnull(weeklySummarySetting.get("channel"),"");
+if(weeklySummaryChannel == "")
+{
+	weeklySummaryChannel = fallbackChannel;
+}
+formInputs.add({"type":"toggle","name":"weekly_summary_enabled","label":"📊 Weekly Summary","value":(weeklySummaryEnabled == "TRUE" || weeklySummaryEnabled == true || weeklySummaryEnabled == "true" || weeklySummaryEnabled == 1 || weeklySummaryEnabled == "1")});
+formInputs.add({"type":"native_select","name":"weekly_summary_channel","label":"Weekly Summary Channel","placeholder":"Select channel","hint":"Current: " + ifnull(weeklySummaryChannel,"Not set"),"mandatory":false,"data_source":"channels","value":weeklySummaryChannel});
+
+// Return form
+	return {
+		"type":"form",
+		"title":"🔔 Notification Settings",
+		"hint":"Configure notification channels for each AWS service",
+		"name":"awsNotificationSettingsForm",
+		"button_label":"💾 Save",
+		"inputs":formInputs,
+		"action":{
+			"type":"invoke.function",
+			"name":"handleForm"
+		}
+	};
+
