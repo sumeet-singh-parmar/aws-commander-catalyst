@@ -1,0 +1,37 @@
+// ============================================================================
+// AWS Cloud Commander - Bot Onboarding Handler
+// ============================================================================
+// Type: Button Function
+// Triggered: When user clicks "Get Started" from welcome card
+// Purpose: Show the Grant Access card (NO connection usage here!)
+// ============================================================================
+
+// Get user info safely
+userName = "there";
+if(user != null)
+{
+    userName = ifnull(user.get("first_name"), ifnull(user.get("name"), "there"));
+}
+
+// Show the Grant Access card
+response = {
+    "text": "One-time authorization to connect with your *AWS Backend*.\n\n🔒 Your credentials are secure.",
+    "card": {
+        "title": "Connect AWS",
+        "thumbnail": "https://www.monks.com/data/styles/738x363_crop/s3/2024-12/AWS.png?VersionId=AgciRGgmrM5MOD.WFIdw68QeG8kI.JR.&h=c74750f6&itok=q-7iCrYZ",
+        "theme": "prompt"
+    },
+    "buttons": [
+        {
+            "label": "Grant Access",
+            "action": {
+                "type": "invoke.function",
+                "data": {"name": "botConnect"}
+            },
+            "key": "grant_access"
+        }
+    ]
+};
+
+return response;
+

@@ -1,0 +1,506 @@
+// ============================================================================
+// AWS Cloud Commander - /aws Command Suggestion Handler
+// ============================================================================
+// Provides autocomplete suggestions as user types the command
+// ============================================================================
+
+suggestions = List();
+
+// Get what user has typed so far
+typedText = ifnull(arguments, "").trim().toLowerCase();
+parts = typedText.toList(" ");
+subcommand = ifnull(parts.get(0), "");
+
+// ============================================================================
+// TOP-LEVEL SUGGESTIONS (when nothing typed yet)
+// ============================================================================
+if(typedText == "" || subcommand == "")
+{
+    suggestions.add({
+        "title": "ec2",
+        "description": "Manage EC2 instances (list, start, stop, reboot)"
+    });
+    suggestions.add({
+        "title": "s3",
+        "description": "Browse S3 buckets and objects"
+    });
+    suggestions.add({
+        "title": "cost",
+        "description": "View AWS cost reports"
+    });
+    suggestions.add({
+        "title": "lambda",
+        "description": "Manage Lambda functions"
+    });
+    suggestions.add({
+        "title": "rds",
+        "description": "Manage RDS databases"
+    });
+    suggestions.add({
+        "title": "alarms",
+        "description": "View CloudWatch alarms"
+    });
+    suggestions.add({
+        "title": "logs",
+        "description": "Query CloudWatch logs"
+    });
+    suggestions.add({
+        "title": "sns",
+        "description": "Manage SNS topics"
+    });
+    suggestions.add({
+        "title": "iam",
+        "description": "IAM security audit"
+    });
+    suggestions.add({
+        "title": "ai",
+        "description": "Ask AI assistant (Claude)"
+    });
+    suggestions.add({
+        "title": "status",
+        "description": "Check backend health"
+    });
+    suggestions.add({
+        "title": "permissions",
+        "description": "Check IAM permissions"
+    });
+    suggestions.add({
+        "title": "settings",
+        "description": "Configure preferences"
+    });
+    suggestions.add({
+        "title": "incidents",
+        "description": "View/create incidents"
+    });
+    suggestions.add({
+        "title": "help",
+        "description": "Show all commands"
+    });
+}
+
+// ============================================================================
+// EC2 SUGGESTIONS
+// ============================================================================
+else if(subcommand == "ec2" || subcommand.startsWith("ec"))
+{
+    suggestions.add({
+        "title": "ec2",
+        "description": "List all EC2 instances"
+    });
+    suggestions.add({
+        "title": "ec2 start",
+        "description": "Start an instance: ec2 start <instance-id>"
+    });
+    suggestions.add({
+        "title": "ec2 stop",
+        "description": "Stop an instance: ec2 stop <instance-id>"
+    });
+    suggestions.add({
+        "title": "ec2 reboot",
+        "description": "Reboot an instance: ec2 reboot <instance-id>"
+    });
+    suggestions.add({
+        "title": "ec2 status",
+        "description": "Get instance status checks"
+    });
+    suggestions.add({
+        "title": "ec2 metrics",
+        "description": "Get CPU/Network metrics"
+    });
+    suggestions.add({
+        "title": "ec2 summary",
+        "description": "Quick summary of all instances"
+    });
+    suggestions.add({
+        "title": "ec2 sg",
+        "description": "List security groups"
+    });
+    suggestions.add({
+        "title": "ec2 vpcs",
+        "description": "List VPCs"
+    });
+}
+
+// ============================================================================
+// S3 SUGGESTIONS
+// ============================================================================
+else if(subcommand == "s3" || subcommand.startsWith("s3"))
+{
+    suggestions.add({
+        "title": "s3",
+        "description": "List all S3 buckets"
+    });
+    suggestions.add({
+        "title": "s3 info",
+        "description": "Get bucket details: s3 info <bucket-name>"
+    });
+    suggestions.add({
+        "title": "s3 search",
+        "description": "Search objects: s3 search <bucket> <term>"
+    });
+    suggestions.add({
+        "title": "s3 download",
+        "description": "Get download URL: s3 download <bucket> <key>"
+    });
+    suggestions.add({
+        "title": "s3 summary",
+        "description": "Quick summary of all buckets"
+    });
+}
+
+// ============================================================================
+// COST SUGGESTIONS
+// ============================================================================
+else if(subcommand == "cost" || subcommand.startsWith("cos"))
+{
+    suggestions.add({
+        "title": "cost",
+        "description": "This week's costs"
+    });
+    suggestions.add({
+        "title": "cost today",
+        "description": "Today's costs"
+    });
+    suggestions.add({
+        "title": "cost month",
+        "description": "Month-to-date costs"
+    });
+    suggestions.add({
+        "title": "cost compare",
+        "description": "Compare this month vs last month"
+    });
+    suggestions.add({
+        "title": "cost forecast",
+        "description": "Cost forecast for the month"
+    });
+    suggestions.add({
+        "title": "cost services",
+        "description": "Top services by cost"
+    });
+    suggestions.add({
+        "title": "cost trend",
+        "description": "Daily cost trend"
+    });
+    suggestions.add({
+        "title": "cost tag",
+        "description": "Costs by tag: cost tag <tag-key>"
+    });
+}
+
+// ============================================================================
+// LAMBDA SUGGESTIONS
+// ============================================================================
+else if(subcommand == "lambda" || subcommand.startsWith("lam"))
+{
+    suggestions.add({
+        "title": "lambda",
+        "description": "List all Lambda functions"
+    });
+    suggestions.add({
+        "title": "lambda invoke",
+        "description": "Invoke a function: lambda invoke <name>"
+    });
+    suggestions.add({
+        "title": "lambda summary",
+        "description": "Quick summary of functions"
+    });
+}
+
+// ============================================================================
+// RDS SUGGESTIONS
+// ============================================================================
+else if(subcommand == "rds" || subcommand.startsWith("rd") || subcommand == "db" || subcommand == "database")
+{
+    suggestions.add({
+        "title": "rds",
+        "description": "List all RDS databases"
+    });
+    suggestions.add({
+        "title": "rds start",
+        "description": "Start a database: rds start <db-id>"
+    });
+    suggestions.add({
+        "title": "rds stop",
+        "description": "Stop a database: rds stop <db-id>"
+    });
+    suggestions.add({
+        "title": "rds reboot",
+        "description": "Reboot a database: rds reboot <db-id>"
+    });
+    suggestions.add({
+        "title": "rds clusters",
+        "description": "List Aurora clusters"
+    });
+    suggestions.add({
+        "title": "rds snapshots",
+        "description": "List DB snapshots"
+    });
+    suggestions.add({
+        "title": "rds summary",
+        "description": "Quick summary of databases"
+    });
+}
+
+// ============================================================================
+// ALARMS SUGGESTIONS
+// ============================================================================
+else if(subcommand == "alarms" || subcommand == "alarm" || subcommand.startsWith("alar"))
+{
+    suggestions.add({
+        "title": "alarms",
+        "description": "List all CloudWatch alarms"
+    });
+    suggestions.add({
+        "title": "alarms active",
+        "description": "Show only active alarms"
+    });
+    suggestions.add({
+        "title": "alarms summary",
+        "description": "Quick summary of alarms"
+    });
+}
+
+// ============================================================================
+// LOGS SUGGESTIONS
+// ============================================================================
+else if(subcommand == "logs" || subcommand == "log" || subcommand.startsWith("log"))
+{
+    suggestions.add({
+        "title": "logs",
+        "description": "List all log groups"
+    });
+    suggestions.add({
+        "title": "logs lambda",
+        "description": "Get Lambda logs: logs lambda <function-name>"
+    });
+    suggestions.add({
+        "title": "logs summary",
+        "description": "Quick summary of log groups"
+    });
+}
+
+// ============================================================================
+// SNS SUGGESTIONS
+// ============================================================================
+else if(subcommand == "sns" || subcommand.startsWith("sn"))
+{
+    suggestions.add({
+        "title": "sns",
+        "description": "List all SNS topics"
+    });
+    suggestions.add({
+        "title": "sns subs",
+        "description": "List all subscriptions"
+    });
+    suggestions.add({
+        "title": "sns publish",
+        "description": "Publish message: sns publish <topic-arn> <message>"
+    });
+    suggestions.add({
+        "title": "sns summary",
+        "description": "Quick summary of topics"
+    });
+}
+
+// ============================================================================
+// IAM SUGGESTIONS
+// ============================================================================
+else if(subcommand == "iam" || subcommand.startsWith("ia"))
+{
+    suggestions.add({
+        "title": "iam",
+        "description": "IAM summary"
+    });
+    suggestions.add({
+        "title": "iam users",
+        "description": "List IAM users"
+    });
+    suggestions.add({
+        "title": "iam user",
+        "description": "Get user details: iam user <username>"
+    });
+    suggestions.add({
+        "title": "iam roles",
+        "description": "List IAM roles"
+    });
+    suggestions.add({
+        "title": "iam security",
+        "description": "Security audit"
+    });
+    suggestions.add({
+        "title": "iam account",
+        "description": "Account summary"
+    });
+}
+
+// ============================================================================
+// AI SUGGESTIONS
+// ============================================================================
+else if(subcommand == "ai" || subcommand == "ask" || subcommand == "claude" || subcommand.startsWith("ai"))
+{
+    suggestions.add({
+        "title": "ai how do I reduce EC2 costs?",
+        "description": "Ask about cost optimization"
+    });
+    suggestions.add({
+        "title": "ai explain VPC peering",
+        "description": "Ask for AWS concept explanation"
+    });
+    suggestions.add({
+        "title": "ai troubleshoot high CPU",
+        "description": "Get troubleshooting help"
+    });
+    suggestions.add({
+        "title": "ai generate CLI command to list S3 buckets",
+        "description": "Generate AWS CLI commands"
+    });
+}
+
+// ============================================================================
+// PERMISSIONS SUGGESTIONS
+// ============================================================================
+else if(subcommand == "permissions" || subcommand == "perms" || subcommand.startsWith("perm"))
+{
+    suggestions.add({
+        "title": "permissions",
+        "description": "Check all IAM permissions"
+    });
+    suggestions.add({
+        "title": "permissions policy",
+        "description": "Get required IAM policy JSON"
+    });
+}
+
+// ============================================================================
+// CONSENT SUGGESTIONS
+// ============================================================================
+else if(subcommand == "consent" || subcommand.startsWith("cons"))
+{
+    suggestions.add({
+        "title": "consent",
+        "description": "View your consent status"
+    });
+    suggestions.add({
+        "title": "consent list",
+        "description": "List all consent categories"
+    });
+    suggestions.add({
+        "title": "consent grant cost_explorer",
+        "description": "Enable Cost Explorer"
+    });
+    suggestions.add({
+        "title": "consent grant bedrock_ai",
+        "description": "Enable AI Assistant"
+    });
+    suggestions.add({
+        "title": "consent revoke",
+        "description": "Revoke consent: consent revoke <category>"
+    });
+}
+
+// ============================================================================
+// SETTINGS SUGGESTIONS - REMOVED (now accessed via Bot Menu)
+// ============================================================================
+
+// ============================================================================
+// INCIDENTS SUGGESTIONS
+// ============================================================================
+else if(subcommand == "incidents" || subcommand == "incident" || subcommand.startsWith("inc"))
+{
+    suggestions.add({
+        "title": "incidents",
+        "description": "List all incidents"
+    });
+    suggestions.add({
+        "title": "incidents create",
+        "description": "Create a new incident"
+    });
+}
+
+// ============================================================================
+// STATUS/HELP SUGGESTIONS
+// ============================================================================
+else if(subcommand == "status" || subcommand == "health" || subcommand.startsWith("stat"))
+{
+    suggestions.add({
+        "title": "status",
+        "description": "Check backend health"
+    });
+}
+else if(subcommand == "help" || subcommand.startsWith("hel"))
+{
+    suggestions.add({
+        "title": "help",
+        "description": "Show all available commands"
+    });
+}
+
+// ============================================================================
+// PARTIAL MATCH - Show relevant suggestions
+// ============================================================================
+else
+{
+    // Filter top-level suggestions based on partial match
+    if("ec2".startsWith(subcommand))
+    {
+        suggestions.add({"title": "ec2", "description": "Manage EC2 instances"});
+    }
+    if("s3".startsWith(subcommand))
+    {
+        suggestions.add({"title": "s3", "description": "Browse S3 buckets"});
+    }
+    if("cost".startsWith(subcommand))
+    {
+        suggestions.add({"title": "cost", "description": "View AWS costs"});
+    }
+    if("lambda".startsWith(subcommand))
+    {
+        suggestions.add({"title": "lambda", "description": "Manage Lambda functions"});
+    }
+    if("rds".startsWith(subcommand))
+    {
+        suggestions.add({"title": "rds", "description": "Manage RDS databases"});
+    }
+    if("alarms".startsWith(subcommand))
+    {
+        suggestions.add({"title": "alarms", "description": "CloudWatch alarms"});
+    }
+    if("logs".startsWith(subcommand))
+    {
+        suggestions.add({"title": "logs", "description": "CloudWatch logs"});
+    }
+    if("sns".startsWith(subcommand))
+    {
+        suggestions.add({"title": "sns", "description": "SNS topics"});
+    }
+    if("iam".startsWith(subcommand))
+    {
+        suggestions.add({"title": "iam", "description": "IAM security"});
+    }
+    if("ai".startsWith(subcommand))
+    {
+        suggestions.add({"title": "ai", "description": "AI assistant"});
+    }
+    if("status".startsWith(subcommand))
+    {
+        suggestions.add({"title": "status", "description": "Health check"});
+    }
+    if("permissions".startsWith(subcommand))
+    {
+        suggestions.add({"title": "permissions", "description": "Check permissions"});
+    }
+    if("incidents".startsWith(subcommand))
+    {
+        suggestions.add({"title": "incidents", "description": "Incidents"});
+    }
+    if("help".startsWith(subcommand))
+    {
+        suggestions.add({"title": "help", "description": "Help"});
+    }
+    if("consent".startsWith(subcommand))
+    {
+        suggestions.add({"title": "consent", "description": "Consent management"});
+    }
+}
+
+return suggestions;

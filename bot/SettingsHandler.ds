@@ -1,0 +1,102 @@
+// ============================================================================
+// AWS Cloud Commander - Settings Bot Menu Action Handler
+// ============================================================================
+// Purpose: Displays the main settings configuration form
+//
+// This handler is triggered when user clicks "Settings" in the Bot Menu
+// Shows form with current user preferences loaded from database
+//
+// Settings managed:
+//   - Default AWS Region (stored in awsprefs.region)
+//   - Cost Alert Threshold (stored in awsprefs.costthreshold)
+//   - Daily Cost Report toggle (stored in awsschedule.dailycost)
+//   - Weekly Infrastructure Summary toggle (stored in awsschedule.weeklysummary)
+//   - Cost Explorer consent (stored in awsprefs.consentcost)
+//   - AI Assistant consent (stored in awsprefs.consentai)
+//   - Lambda Invocation consent (stored in awsprefs.consentlambda)
+//
+// Note: Notification channels are managed separately via Notification Settings Bot Menu Action
+// ============================================================================
+
+// Get user info safely
+userId = "";
+userName = "Unknown";
+if(user != null)
+{
+	userId = ifnull(user.get("id"),"");
+	userName = ifnull(user.get("first_name"),ifnull(user.get("name"),"Unknown"));
+}
+
+// Get current settings from awsprefs database
+settingsQuery = Map();
+settingsQuery.put("criteria","userid==" + userId);
+existingRecords = zoho.cliq.getRecords("awsprefs",settingsQuery);
+// Get schedule settings from awsschedule database
+scheduleRecords = zoho.cliq.getRecords("awsschedule",settingsQuery);
+// Default values - preferences
+currentRegion = "ap-south-1";
+currentThreshold = "50";
+currentConsentCost = false;
+currentConsentAi = false;
+currentConsentLambda = false;
+// Default values - schedule
+currentDailyCost = false;
+currentWeeklySummary = false;
+// Read from awsprefs table
+if(existingRecords != null && existingRecords.get("status") == "SUCCESS")
+{
+	recordList = existingRecords.get("list");
+	if(recordList != null && recordList.size() > 0)
+	{
+		prefs = recordList.get(0);
+		if(prefs != null)
+		{
+			currentRegion = ifnull(prefs.get("region"),"ap-south-1");
+			currentThreshold = ifnull(prefs.get("costthreshold"),"50").toString();
+			// Handle consent values (could be boolean, string, or number)
+			consentCostVal = prefs.get("consentcost");
+			if(consentCostVal == true || consentCostVal == "true" || consentCostVal == 1 || consentCostVal == "1")
+			{
+				currentConsentCost = true;
+			}
+			consentAiVal = prefs.get("consentai");
+			if(consentAiVal == true || consentAiVal == "true" || consentAiVal == 1 || consentAiVal == "1")
+			{
+				currentConsentAi = true;
+			}
+			consentLambdaVal = prefs.get("consentlambda");
+			if(consentLambdaVal == true || consentLambdaVal == "true" || consentLambdaVal == 1 || consentLambdaVal == "1")
+			{
+				currentConsentLambda = true;
+			}
+		}
+	}
+}
+// Read from awsschedule table (schedule-related settings only, channel is in awsprefs)
+// NOTE: Zoho Cliq DB stores booleans as "TRUE"/"FALSE" strings
+if(scheduleRecords != null && scheduleRecords.get("status") == "SUCCESS")
+{
+	scheduleList = scheduleRecords.get("list");
+	if(scheduleList != null && scheduleList.size() > 0)
+	{
+		schedule = scheduleList.get(0);
+		if(schedule != null)
+		{
+			dailyCostVal = schedule.get("dailycost");
+			if(dailyCostVal == true || dailyCostVal == "true" || dailyCostVal == "TRUE" || dailyCostVal == 1 || dailyCostVal == "1")
+			{
+				currentDailyCost = true;
+			}
+			weeklySummaryVal = schedule.get("weeklysummary");
+			if(weeklySummaryVal == true || weeklySummaryVal == "true" || weeklySummaryVal == "TRUE" || weeklySummaryVal == 1 || weeklySummaryVal == "1")
+			{
+				currentWeeklySummary = true;
+			}
+		}
+	}
+}
+// Return form using inline syntax (same pattern as working AI form)
+// NOTE: Zoho Cliq has UNDOCUMENTED label length limit - keep labels short or form silently fails!
+// NOTE: Settings form does NOT require credentials check - users need to configure settings even before credentials are set up
+return {"type":"form","title":"⚙️ AWS Settings","hint":"Configure your AWS Cloud Commander preferences. For notification channels, use Bot Menu → Notifications.","name":"awsSettingsForm","button_label":"💾 Save Settings","inputs":{{"type":"select","name":"region","label":"🌍 Default AWS Region","placeholder":"Select your primary AWS region","mandatory":true,"value":currentRegion,"options":{{"value":"ap-south-1","label":"Asia Pacific (Mumbai)"},{"value":"us-east-1","label":"US East (N. Virginia)"},{"value":"us-west-2","label":"US West (Oregon)"},{"value":"eu-west-1","label":"Europe (Ireland)"},{"value":"eu-central-1","label":"Europe (Frankfurt)"},{"value":"ap-southeast-1","label":"Asia Pacific (Singapore)"},{"value":"ap-northeast-1","label":"Asia Pacific (Tokyo)"}}},{"type":"number","name":"costThreshold","label":"💵 Cost Alert Threshold ($)","placeholder":"Alert when daily cost exceeds this","mandatory":false,"value":currentThreshold,"min":"1","max":"10000"},{"type":"toggle","name":"dailyCost","label":"📊 Daily Cost Report","value":currentDailyCost},{"type":"toggle","name":"weeklySummary","label":"📈 Weekly Infrastructure Summary","value":currentWeeklySummary},{"type":"toggle","name":"consentCost","label":"💰 Enable Cost Explorer API ($0.01/request)","value":currentConsentCost},{"type":"toggle","name":"consentAi","label":"🤖 Enable AI Assistant ($0.01-0.15/query)","value":currentConsentAi},{"type":"toggle","name":"consentLambda","label":"⚡ Enable Lambda Invocation (incurs cost/invoke)","value":currentConsentLambda}},"action":{"type":"invoke.function","name":"handleForm"}};
+

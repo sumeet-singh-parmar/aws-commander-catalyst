@@ -1,0 +1,300 @@
+// ============================================================================
+// AWS Cloud Commander - Dashboard Widget Function Handler
+// Function Name: dashboardWidgetFunction
+// ============================================================================
+// Type: Widget Function Handler
+// Handles: Button clicks within the widget (incident management, refresh, navigation)
+// ============================================================================
+
+// Get button info - try multiple ways widgets might pass button data
+buttonId = "";
+if(target != null)
+{
+	try
+	{
+		buttonId = ifnull(target.get("id"),"");
+		if(buttonId == "")
+		{
+			buttonId = ifnull(target.get("key"),"");
+		}
+	}
+	catch(e)
+	{
+		// target is not a Map, ignore
+	}
+}
+
+// Debug: log what we received
+info "Dashboard Widget Function - target: " + target;
+info "Dashboard Widget Function - buttonId: " + buttonId;
+
+userId = "";
+if(user != null)
+{
+	userId = ifnull(user.get("id"),"");
+}
+
+// ============================================================================
+// INCIDENT MANAGEMENT HANDLERS
+// ============================================================================
+
+// Handle create_incident button - return form
+if(buttonId == "create_incident")
+{
+	return {
+		"type": "form",
+		"title": "Create Incident",
+		"hint": "Report a new AWS incident",
+		"name": "awsIncidentForm",
+		"button_label": "Create Incident",
+		"inputs": [
+			{
+				"type": "text",
+				"name": "title",
+				"label": "Incident Title",
+				"placeholder": "Brief description of the issue",
+				"mandatory": true
+			},
+			{
+				"type": "select",
+				"name": "severity",
+				"label": "Severity",
+				"placeholder": "Select severity level",
+				"mandatory": true,
+				"value": "medium",
+				"options": [
+					{"value": "critical", "label": "Critical - Service Down"},
+					{"value": "high", "label": "High - Major Impact"},
+					{"value": "medium", "label": "Medium - Partial Impact"},
+					{"value": "low", "label": "Low - Minor Issue"}
+				]
+			},
+			{
+				"type": "text",
+				"name": "resource",
+				"label": "Affected Resource",
+				"placeholder": "e.g., ec2:i-1234567890abcdef0",
+				"mandatory": false
+			},
+			{
+				"type": "textarea",
+				"name": "notes",
+				"label": "Additional Notes",
+				"placeholder": "Any additional information...",
+				"mandatory": false
+			}
+		],
+		"action": {
+			"type": "invoke.function",
+			"name": "handleForm"
+		}
+	};
+}
+
+// Handle incident_info button - show incident details card
+if(buttonId != null && buttonId.contains("incident_info_"))
+{
+	incId = buttonId.subString(14);
+	// Fetch incident details
+	incidentQuery = Map();
+	incidentQuery.put("criteria","incidentid==" + incId);
+	incidentsResponse = zoho.cliq.getRecords("awsincidents",incidentQuery);
+	if(incidentsResponse != null && incidentsResponse.get("status") == "SUCCESS")
+	{
+		incidentList = incidentsResponse.get("list");
+		if(incidentList != null && incidentList.size() > 0)
+		{
+			inc = incidentList.get(0);
+			infoData = List();
+			infoData.add({"ID":ifnull(inc.get("incidentid"),"")});
+			infoData.add({"Title":ifnull(inc.get("title"),"")});
+			severity = ifnull(inc.get("severity"),"medium");
+			infoData.add({"Severity":"`" + severity + "`"});
+			status = ifnull(inc.get("status"),"open");
+			infoData.add({"Status":"`" + status + "`"});
+			infoData.add({"Resource":ifnull(inc.get("resource"),"N/A")});
+			notes = ifnull(inc.get("notes"),"N/A");
+			if(notes.length() > 200)
+			{
+				notes = notes.subString(0,197) + "...";
+			}
+			infoData.add({"Notes":notes});
+			createdAt = ifnull(inc.get("createdat"),"");
+			dateDisplay = "N/A";
+			if(createdAt != "")
+			{
+				try
+				{
+					createdAtNum = createdAt.toLong();
+					createdDate = createdAtNum.toDate();
+					if(createdDate != null)
+					{
+						dateDisplay = createdDate.toString("dd MMM yyyy, HH:mm");
+					}
+				}
+				catch(e)
+				{
+				}
+			}
+			infoData.add({"Created":dateDisplay});
+			return {
+				"type": "banner",
+				"text": "Incident Details",
+				"status": "info"
+			};
+		}
+	}
+	return {
+		"type": "banner",
+		"text": "Incident not found",
+		"status": "error"
+	};
+}
+
+// Handle quick_resolve button - quickly resolve incident
+if(buttonId != null && buttonId.contains("quick_resolve_"))
+{
+	incId = buttonId.subString(14);
+	// Update incident to resolved status
+	incidentQuery = Map();
+	incidentQuery.put("criteria","incidentid==" + incId);
+	incidentsResponse = zoho.cliq.getRecords("awsincidents",incidentQuery);
+	if(incidentsResponse != null && incidentsResponse.get("status") == "SUCCESS")
+	{
+		incidentList = incidentsResponse.get("list");
+		if(incidentList != null && incidentList.size() > 0)
+		{
+			incidentRecord = incidentList.get(0);
+			recordId = ifnull(incidentRecord.get("id"),"");
+			if(recordId != "")
+			{
+				userId = "";
+				if(user != null)
+				{
+					userId = ifnull(user.get("id"),"").toString();
+				}
+				updateData = Map();
+				updateData.put("status","resolved");
+				updateData.put("resolvedby",userId);
+				updateData.put("updatedat",zoho.currenttime.toLong().toString());
+				updateResponse = zoho.cliq.updateRecord("awsincidents",recordId,updateData);
+				if(updateResponse != null && updateResponse.get("status") == "SUCCESS")
+				{
+					return {
+						"type": "banner",
+						"text": "Incident resolved successfully",
+						"status": "success"
+					};
+				}
+			}
+		}
+	}
+	return {
+		"type": "banner",
+		"text": "Failed to resolve incident",
+		"status": "error"
+	};
+}
+
+// Handle incident_update button - return update form
+if(buttonId != null && buttonId.contains("incident_update_"))
+{
+	incId = buttonId.subString(16);
+	// Fetch incident details
+	incidentQuery = Map();
+	incidentQuery.put("criteria","incidentid==" + incId);
+	incidentsResponse = zoho.cliq.getRecords("awsincidents",incidentQuery);
+	currentStatus = "open";
+	currentSeverity = "medium";
+	if(incidentsResponse != null && incidentsResponse.get("status") == "SUCCESS")
+	{
+		incidentList = incidentsResponse.get("list");
+		if(incidentList != null && incidentList.size() > 0)
+		{
+			inc = incidentList.get(0);
+			currentStatus = ifnull(inc.get("status"),"open");
+			currentSeverity = ifnull(inc.get("severity"),"medium");
+		}
+	}
+	return {
+		"type": "form",
+		"title": "Update Incident",
+		"hint": "Update incident status",
+		"name": "awsUpdateIncidentForm",
+		"button_label": "Update",
+		"inputs": [
+			{
+				"type": "hidden",
+				"name": "incidentId",
+				"value": incId
+			},
+			{
+				"type": "select",
+				"name": "status",
+				"label": "Status",
+				"placeholder": "Select new status",
+				"mandatory": true,
+				"value": currentStatus,
+				"options": [
+					{"value": "open", "label": "Open"},
+					{"value": "investigating", "label": "Investigating"},
+					{"value": "resolved", "label": "Resolved"},
+					{"value": "closed", "label": "Closed"}
+				]
+			},
+			{
+				"type": "textarea",
+				"name": "notes",
+				"label": "Add Notes",
+				"placeholder": "Add any notes about this update...",
+				"mandatory": false
+			}
+		],
+		"action": {
+			"type": "invoke.function",
+			"name": "handleForm"
+		}
+	};
+}
+
+// ============================================================================
+// DASHBOARD NAVIGATION HANDLERS (from original dashboard widget)
+// ============================================================================
+
+// Handle refresh actions
+if(buttonId != null && buttonId.contains("refresh_"))
+{
+	tabName = buttonId.replaceFirst("refresh_", "");
+	// Return banner to indicate refresh
+	return {
+		"type": "banner",
+		"text": "🔄 Refreshing " + tabName + "...",
+		"status": "success"
+	};
+}
+
+// Handle navigation actions
+if(buttonId != null && buttonId.contains("nav_"))
+{
+	tabName = buttonId.replaceFirst("nav_", "");
+	// Map tab names to IDs
+	tabMap = Map();
+	tabMap.put("overview", "overview");
+	tabMap.put("ec2", "ec2");
+	tabMap.put("s3", "s3");
+	tabMap.put("alarms", "alarms");
+	tabMap.put("costs", "costs");
+	targetTab = ifnull(tabMap.get(tabName), "overview");
+	return {
+		"type": "banner",
+		"text": "Navigating to " + tabName + "...",
+		"status": "success"
+	};
+}
+
+// Default response
+return {
+	"type": "banner",
+	"text": "Action completed",
+	"status": "success"
+};

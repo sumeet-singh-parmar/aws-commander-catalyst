@@ -1,0 +1,141 @@
+// ============================================================================
+// AWS Cloud Commander - Bot Connection/OAuth Handler
+// ============================================================================
+// Purpose: Handles OAuth authorization flow for AWS Cloud Commander connection
+//
+// This handler is triggered when user clicks "Grant Access" button
+// Initiates OAuth flow using the configured connection (awscloudcommander)
+//
+// Flow:
+//   1. Fetches user's custom backend URL (if Option 3)
+//   2. Uses invokeurl with connection parameter to trigger OAuth
+//   3. Returns authorization status card
+//
+// Note: Currently uses connection-based OAuth, but AWS credentials are stored
+//       directly via credentialsForm rather than OAuth tokens
+// ============================================================================
+
+// Get user info safely
+userName = "there";
+userId = "";
+if(user != null)
+{
+    userName = ifnull(user.get("first_name"), ifnull(user.get("name"), "there"));
+    userId = ifnull(user.get("id"), "");
+}
+
+response = Map();
+
+// Get user's backend URL from awssetup (for Option 3: Own Backend)
+DEFAULT_API_URL = "https://aws-cloudops-906900311.development.catalystserverless.com/server/aws_handler/";
+API_URL = DEFAULT_API_URL;
+if(userId != "")
+{
+	setupQuery = Map();
+	setupQuery.put("criteria","userid==" + userId);
+	setupRecords = zoho.cliq.getRecords("awssetup",setupQuery);
+	if(setupRecords != null && setupRecords.get("status") == "SUCCESS")
+	{
+		setupList = setupRecords.get("list");
+		if(setupList != null && setupList.size() > 0)
+		{
+			setupRecord = setupList.get(0);
+			customBackendUrl = ifnull(setupRecord.get("backendurl"),"");
+			if(customBackendUrl != null && customBackendUrl != "")
+			{
+				API_URL = customBackendUrl;
+			}
+		}
+	}
+}
+
+// Trigger OAuth by calling the backend
+try
+{
+    requestBody = Map();
+    requestBody.put("service", "health");
+    requestBody.put("userId", userId);
+    
+    apiResponse = invokeurl
+    [
+        url: API_URL
+        type: POST
+        parameters: requestBody.toString()
+        headers: {"Content-Type": "application/json"}
+        connection: "awscloudcommander"
+    ];
+    
+    if(apiResponse.get("success") == true)
+    {
+        // Success - show card with next steps
+        response = {
+            "text": "✅ *Connection Authorized!*\n\nYour central hub for all AWS operations. Type `/aws` in any chat window to access commands, or use the *Dashboard Action* for a quick overview of your infrastructure.",
+            "card": {
+                "title": "AWS Dashboard",
+                "thumbnail": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQf8_ACwdQT0NMs_ptU8917_1THnLQqxK_u8Q&s",
+                "theme": "modern-inline"
+            },
+            "slides": [
+                {
+                    "type": "text",
+                    "title": "Getting Started",
+                    "data": "• `/aws status` - Quick health check\n• `/aws help` - View all commands"
+                }
+            ],
+            "buttons": [
+                {
+                    "label": "Next →",
+                    "action": {
+                        "type": "invoke.function",
+                        "data": {"name": "botTour"}
+                    },
+                    "key": "tour_ec2"
+                }
+            ]
+        };
+    }
+    else
+    {
+        // Error response from backend
+        response = {
+            "text": "⚠️ *Backend responded with error*\n\n" + ifnull(apiResponse.get("error"), "Unknown error"),
+            "card": {
+                "title": "Connection Failed",
+                "theme": "prompt"
+            },
+            "buttons": [
+                {
+                    "label": "Try Again",
+                    "action": {
+                        "type": "invoke.function",
+                        "data": {"name": "botConnect"}
+                    },
+                    "key": "retry"
+                }
+            ]
+        };
+    }
+}
+catch(e)
+{
+    // Connection not authorized - OAuth popup should appear
+    response = {
+        "text": "🔐 *Almost there!*\n\nA popup should have appeared to authorize the connection.\n\n1️⃣ Complete the authorization in the popup\n2️⃣ Click the button below to continue",
+        "card": {
+            "title": "Authorization Required",
+            "theme": "prompt"
+        },
+        "buttons": [
+            {
+                "label": "Continue",
+                "action": {
+                    "type": "invoke.function",
+                    "data": {"name": "botConnect"}
+                },
+                "key": "retry"
+            }
+        ]
+    };
+}
+
+return response;

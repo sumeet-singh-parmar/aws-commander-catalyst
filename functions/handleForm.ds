@@ -1,0 +1,2824 @@
+
+// ============================================================================
+// AWS Cloud Commander - Form Submission Handler
+// ============================================================================
+// Purpose: Processes all form submissions from AWS Cloud Commander
+//
+// This handler processes forms like:
+//   - awsSettingsForm          → User preferences (region, consents, schedulers)
+//   - awsNotificationSettingsForm → Notification channel configuration
+//   - awsCredentialsForm       → AWS access keys storage
+//   - awsBackendForm           → Custom backend URL configuration
+//   - awsS3CreateForm          → S3 bucket creation
+//   - awsLambdaInvokeForm      → Lambda function invocation
+//   - awsSNS PublishForm       → SNS message publishing
+//   - awsIncidentForm          → Incident creation
+//
+// Flow:
+//   1. Extracts form name and values from submission
+//   2. Fetches user's backend URL (if Option 3)
+//   3. Routes to appropriate form processor based on form name
+//   4. Validates input data
+//   5. Calls backend API or updates database
+//   6. Returns success/error card with next steps
+//
+// Key Features:
+//   - Handles 10+ different form types
+//   - Validates required fields and data formats
+//   - Integrates with dynamic notification system
+//   - Manages consent flows for paid APIs
+//   - Updates multiple database tables (awsprefs, awsschedule, awsnotifications)
+// ============================================================================
+DEFAULT_API_URL = "https://aws-cloudops-906900311.development.catalystserverless.com/server/aws_handler/";
+DEFAULT_UPLOAD_URL = "https://aws-cloudops-906900311.development.catalystserverless.com/server/aws_handler/upload";
+// SECTION: Extract form information from submission
+formName = "";
+formValues = Map();
+if(form != null)
+{
+	formName = ifnull(form.get("name"),"");
+	formValues = ifnull(form.get("values"),Map());
+}
+// SECTION: Get user information safely
+userId = "";
+userName = "Unknown";
+if(user != null)
+{
+	userId = ifnull(user.get("id"),"");
+	userName = ifnull(user.get("first_name"),ifnull(user.get("name"),"Unknown"));
+}
+// SECTION: Fetch user's custom backend URL (for Option 3: Own Backend setup)
+API_URL = DEFAULT_API_URL;
+UPLOAD_URL = DEFAULT_UPLOAD_URL;
+if(userId != "")
+{
+	setupQuery = Map();
+	setupQuery.put("criteria","userid==" + userId);
+	setupRecords = zoho.cliq.getRecords("awssetup",setupQuery);
+	if(setupRecords != null && setupRecords.get("status") == "SUCCESS")
+	{
+		setupList = setupRecords.get("list");
+		if(setupList != null && setupList.size() > 0)
+		{
+			setupRecord = setupList.get(0);
+			customBackendUrl = ifnull(setupRecord.get("backendurl"),"");
+			if(customBackendUrl != null && customBackendUrl != "")
+			{
+				API_URL = customBackendUrl;
+				// Update upload URL to match backend URL
+				if(customBackendUrl.endsWith("/"))
+				{
+					UPLOAD_URL = customBackendUrl + "upload";
+				}
+				else
+				{
+					UPLOAD_URL = customBackendUrl + "/upload";
+				}
+			}
+		}
+	}
+}
+// SECTION: Fetch user's region preference (default: ap-south-1)
+userRegion = "ap-south-1";
+if(userId != "")
+{
+	prefsQuery = Map();
+	prefsQuery.put("criteria","userid==" + userId);
+	prefsRecords = zoho.cliq.getRecords("awsprefs",prefsQuery);
+	if(prefsRecords != null && prefsRecords.get("status") == "SUCCESS")
+	{
+		prefsList = prefsRecords.get("list");
+		if(prefsList != null && prefsList.size() > 0)
+		{
+			prefs = prefsList.get(0);
+			if(prefs != null)
+			{
+				userRegion = ifnull(prefs.get("region"),"ap-south-1");
+			}
+		}
+	}
+}
+response = Map();
+// ============================================================================
+// SECTION: Settings Form Processing (awsSettingsForm)
+// ============================================================================
+// Processes the main settings form submission
+// Updates: awsprefs (region, cost threshold, consents) and awsschedule (schedulers)
+// ============================================================================
+if(formName == "awsSettingsForm")
+{
+	// STEP 1: Load existing values from database to preserve unchanged fields
+	queryMap = Map();
+	queryMap.put("criteria","userid==" + userId);
+	existingRecords = zoho.cliq.getRecords("awsprefs",queryMap);
+	scheduleRecords = zoho.cliq.getRecords("awsschedule",queryMap);
+	// Default values for awsprefs
+	existingRegion = "ap-south-1";
+	existingThreshold = 50;
+	existingConsentCost = false;
+	existingConsentAi = false;
+	existingConsentLambda = false;
+	// Default values for awsschedule
+	existingDailyCost = false;
+	existingWeeklySummary = false;
+	// Load existing awsprefs values
+	if(existingRecords != null && existingRecords.get("status") == "SUCCESS")
+	{
+		recordList = existingRecords.get("list");
+		if(recordList != null && recordList.size() > 0)
+		{
+			existingPrefs = recordList.get(0);
+			if(existingPrefs != null)
+			{
+				existingRegion = ifnull(existingPrefs.get("region"),"ap-south-1");
+				existingThreshold = ifnull(existingPrefs.get("costthreshold"),50);
+				// Handle boolean values from DB
+				val = existingPrefs.get("consentcost");
+				if(val == true || val == "true" || val == 1 || val == "1")
+				{
+					existingConsentCost = true;
+				}
+				val = existingPrefs.get("consentai");
+				if(val == true || val == "true" || val == 1 || val == "1")
+				{
+					existingConsentAi = true;
+				}
+				val = existingPrefs.get("consentlambda");
+				if(val == true || val == "true" || val == 1 || val == "1")
+				{
+					existingConsentLambda = true;
+				}
+			}
+		}
+	}
+	// Load existing awsschedule values
+	// NOTE: Zoho Cliq DB stores booleans as "TRUE"/"FALSE" strings
+	if(scheduleRecords != null && scheduleRecords.get("status") == "SUCCESS")
+	{
+		scheduleList = scheduleRecords.get("list");
+		if(scheduleList != null && scheduleList.size() > 0)
+		{
+			existingSchedule = scheduleList.get(0);
+			if(existingSchedule != null)
+			{
+				val = existingSchedule.get("dailycost");
+				if(val == true || val == "true" || val == "TRUE" || val == 1 || val == "1")
+				{
+					existingDailyCost = true;
+				}
+				val = existingSchedule.get("weeklysummary");
+				if(val == true || val == "true" || val == "TRUE" || val == 1 || val == "1")
+				{
+					existingWeeklySummary = true;
+				}
+			}
+		}
+	}
+	// =========================================================================
+	// STEP 2: Get form values (these will override existing if provided)
+	// =========================================================================
+	// Region - extract from select object
+	regionRaw = formValues.get("region");
+	region = existingRegion;
+	if(regionRaw != null)
+	{
+		regionValue = regionRaw.get("value");
+		if(regionValue != null)
+		{
+			region = regionValue.toString();
+		}
+		else if(regionRaw.toString() != "")
+		{
+			region = regionRaw.toString();
+		}
+	}
+	// Cost threshold
+	thresholdRaw = formValues.get("costThreshold");
+	costThreshold = existingThreshold;
+	if(thresholdRaw != null)
+	{
+		costThreshold = thresholdRaw;
+	}
+	// Toggle values - form sends true/false directly when toggled
+	// If user doesn't touch toggle, it still sends current state
+	// Note: alertsEnabled removed - use Notification Settings instead
+	// Keep default TRUE for backward compatibility
+	alertsEnabled = true;
+	dailyCostRaw = formValues.get("dailyCost");
+	dailyCost = existingDailyCost;
+	if(dailyCostRaw != null)
+	{
+		if(dailyCostRaw == true || dailyCostRaw == "true")
+		{
+			dailyCost = true;
+		}
+		else if(dailyCostRaw == false || dailyCostRaw == "false")
+		{
+			dailyCost = false;
+		}
+	}
+	weeklySummaryRaw = formValues.get("weeklySummary");
+	weeklySummary = existingWeeklySummary;
+	if(weeklySummaryRaw != null)
+	{
+		if(weeklySummaryRaw == true || weeklySummaryRaw == "true")
+		{
+			weeklySummary = true;
+		}
+		else if(weeklySummaryRaw == false || weeklySummaryRaw == "false")
+		{
+			weeklySummary = false;
+		}
+	}
+	consentCostRaw = formValues.get("consentCost");
+	consentCost = existingConsentCost;
+	if(consentCostRaw != null)
+	{
+		if(consentCostRaw == true || consentCostRaw == "true")
+		{
+			consentCost = true;
+		}
+		else if(consentCostRaw == false || consentCostRaw == "false")
+		{
+			consentCost = false;
+		}
+	}
+	consentAiRaw = formValues.get("consentAi");
+	consentAi = existingConsentAi;
+	if(consentAiRaw != null)
+	{
+		if(consentAiRaw == true || consentAiRaw == "true")
+		{
+			consentAi = true;
+		}
+		else if(consentAiRaw == false || consentAiRaw == "false")
+		{
+			consentAi = false;
+		}
+	}
+	consentLambdaRaw = formValues.get("consentLambda");
+	consentLambda = existingConsentLambda;
+	if(consentLambdaRaw != null)
+	{
+		if(consentLambdaRaw == true || consentLambdaRaw == "true")
+		{
+			consentLambda = true;
+		}
+		else if(consentLambdaRaw == false || consentLambdaRaw == "false")
+		{
+			consentLambda = false;
+		}
+	}
+	// Prepare awsprefs data (preferences + consent fields)
+	// Note: Channel is now handled in Notification Settings (Bot Menu → Notifications)
+	prefsData = Map();
+	prefsData.put("region",region);
+	prefsData.put("costthreshold",costThreshold);
+	prefsData.put("consentcost",consentCost);
+	prefsData.put("consentai",consentAi);
+	prefsData.put("consentlambda",consentLambda);
+	// Prepare awsschedule data (schedule-related fields)
+	// IMPORTANT: Zoho Cliq DB stores booleans as strings "TRUE"/"FALSE"
+	scheduleData = Map();
+	// alertsenabled removed from form - keep default TRUE for backward compatibility
+	// Users should use Notification Settings for per-type notification configuration
+	scheduleData.put("alertsenabled","TRUE");
+	if(dailyCost == true)
+	{
+		scheduleData.put("dailycost","TRUE");
+	}
+	else
+	{
+		scheduleData.put("dailycost","FALSE");
+	}
+	if(weeklySummary == true)
+	{
+		scheduleData.put("weeklysummary","TRUE");
+	}
+	else
+	{
+		scheduleData.put("weeklysummary","FALSE");
+	}
+	// getRecords returns {"status":"SUCCESS","list":[...]}
+	prefsRecordId = "";
+	if(existingRecords != null && existingRecords.get("status") == "SUCCESS")
+	{
+		recordList = existingRecords.get("list");
+		if(recordList != null && recordList.size() > 0)
+		{
+			existingRecord = recordList.get(0);
+			if(existingRecord != null)
+			{
+				prefsRecordId = ifnull(existingRecord.get("id"),"");
+			}
+		}
+	}
+	// Check awsschedule record
+	scheduleRecordId = "";
+	if(scheduleRecords != null && scheduleRecords.get("status") == "SUCCESS")
+	{
+		scheduleList = scheduleRecords.get("list");
+		if(scheduleList != null && scheduleList.size() > 0)
+		{
+			scheduleRecord = scheduleList.get(0);
+			if(scheduleRecord != null)
+			{
+				scheduleRecordId = ifnull(scheduleRecord.get("id"),"");
+			}
+		}
+	}
+	// Build response text
+	responseText = "";
+	isNew = false;
+	// Save awsprefs
+	if(prefsRecordId != "")
+	{
+		// Update existing awsprefs record
+		zoho.cliq.updateRecord("awsprefs",prefsRecordId,prefsData);
+		responseText = "*⚙️ Settings Updated!*\n\n";
+	}
+	else
+	{
+		// Create new awsprefs record
+		prefsData.put("userid",userId);
+		prefsData.put("username",userName);
+		// channel is already in prefsData from above
+		zoho.cliq.createRecord("awsprefs",prefsData);
+		responseText = "*🎉 Welcome to AWS Cloud Commander!*\n\n";
+		isNew = true;
+	}
+	// Save awsschedule
+	if(scheduleRecordId != "" && scheduleRecordId != null && scheduleRecordId.toString().length() > 0)
+	{
+		// Update existing awsschedule record
+		zoho.cliq.updateRecord("awsschedule",scheduleRecordId,scheduleData);
+	}
+	else
+	{
+		// Create new awsschedule record
+		scheduleData.put("userid",userId);
+		scheduleData.put("username",userName);
+		zoho.cliq.createRecord("awsschedule",scheduleData);
+	}
+	// Build settings display
+	responseText = responseText + "*AWS Configuration*\n";
+	responseText = responseText + "🌍 Region: " + region + "\n";
+	responseText = responseText + "💵 Cost Threshold: $" + costThreshold + "\n";
+	responseText = responseText + "━━━━━━━━━━━━━━━━━━━━\n";
+	responseText = responseText + "*Scheduled Reports*\n";
+	if(dailyCost == true)
+	{
+		responseText = responseText + "📊 Daily Cost Report: ✅ Enabled\n";
+	}
+	else
+	{
+		responseText = responseText + "📊 Daily Cost Report: ❌ Disabled\n";
+	}
+	if(weeklySummary == true)
+	{
+		responseText = responseText + "📈 Weekly Summary: ✅ Enabled\n";
+	}
+	else
+	{
+		responseText = responseText + "📈 Weekly Summary: ❌ Disabled\n";
+	}
+	responseText = responseText + "━━━━━━━━━━━━━━━━━━━━\n";
+	responseText = responseText + "*Paid Features*\n";
+	if(consentCost == true)
+	{
+		responseText = responseText + "💰 Cost Explorer API: ✅ Enabled\n";
+	}
+	else
+	{
+		responseText = responseText + "💰 Cost Explorer API: ❌ Disabled\n";
+	}
+	if(consentAi == true)
+	{
+		responseText = responseText + "🤖 AI Assistant: ✅ Enabled\n";
+	}
+	else
+	{
+		responseText = responseText + "🤖 AI Assistant: ❌ Disabled\n";
+	}
+	if(consentLambda == true)
+	{
+		responseText = responseText + "⚡ Lambda Invocation: ✅ Enabled\n";
+	}
+	else
+	{
+		responseText = responseText + "⚡ Lambda Invocation: ❌ Disabled\n";
+	}
+	responseText = responseText + "━━━━━━━━━━━━━━━━━━━━\n";
+	responseText = responseText + "💡 *Notification Channels:* Configure in Bot Menu → Notifications\n";
+	if(isNew == true)
+	{
+		responseText = responseText + "\n💡 Try `/aws ec2` to get started!";
+	}
+	response.put("text",responseText);
+	response.put("card",{"theme":"modern-inline"});
+	// Add buttons
+	btnDashboard = Map();
+	btnDashboard.put("label","🏠 Dashboard");
+	btnDashboard.put("hint","Go to dashboard");
+	btnDashboard.put("type","+");
+	btnDashboard.put("key","dashboard");
+	btnAction = Map();
+	btnAction.put("type","invoke.function");
+	btnAction.put("data",{"name":"handleButton"});
+	btnDashboard.put("action",btnAction);
+	buttonsList = List();
+	buttonsList.add(btnDashboard);
+	response.put("buttons",buttonsList);
+	// Log to audit
+	logEntry = Map();
+	logEntry.put("logid","LOG-" + zoho.currenttime.toLong());
+	logEntry.put("userid",userId);
+	logEntry.put("username",userName);
+	logEntry.put("action","settings:update");
+	logEntry.put("resource","awsprefs");
+	logEntry.put("timestamp",zoho.currenttime.toLong().toString());
+	logEntry.put("result","success");
+	logEntry.put("details","region=" + region + ",cost=" + consentCost + ",ai=" + consentAi + ",lambda=" + consentLambda);
+	zoho.cliq.createRecord("awsauditlog",logEntry);
+}
+// ============================================================================
+// ============================================================================
+// SECTION: Incident Creation Form Processing (awsIncidentForm)
+// ============================================================================
+// Processes incident creation form submission
+// Creates new incident record in awsincidents table with:
+//   - Incident ID (auto-generated), Title, Severity, Status, Resource, Notes
+// Returns success card with incident details and action buttons
+// ============================================================================
+else if(formName == "awsIncidentForm")
+{
+	// Get form values - MUST match form field names exactly!
+	title = ifnull(formValues.get("title"),"Untitled Incident");
+	severityRaw = formValues.get("severity");
+	resource = ifnull(formValues.get("resource"),"");
+	notes = ifnull(formValues.get("notes"),"");
+	// Extract severity value - handle both string and object formats
+	severity = "medium";
+	if(severityRaw != null)
+	{
+		// Check if it's a map/object with "value" key
+		severityValue = severityRaw.get("value");
+		if(severityValue != null)
+		{
+			severity = severityValue.toString();
+		}
+		else
+		{
+			severity = severityRaw.toString();
+		}
+	}
+	// Generate incident ID
+	incidentId = "INC-" + zoho.currenttime.toLong().toString();
+	// Create incident record - ALL values as strings
+	currentTimestamp = zoho.currenttime.toLong().toString();
+	incidentData = Map();
+	incidentData.put("incidentid",incidentId);
+	incidentData.put("title",title.toString());
+	incidentData.put("severity",severity.toString());
+	incidentData.put("status","open");
+	incidentData.put("resource",resource.toString());
+	incidentData.put("createdat",currentTimestamp);
+	incidentData.put("updatedat",currentTimestamp);
+	incidentData.put("reportedby",userId.toString());
+	incidentData.put("resolvedby","");
+	incidentData.put("notes",notes.toString());
+	// Save to database
+	createResult = zoho.cliq.createRecord("awsincidents",incidentData);
+	// Format severity for display
+	severityEmoji = "🟡";
+	severityLabel = "Medium";
+	if(severity == "critical")
+	{
+		severityEmoji = "🔴";
+		severityLabel = "Critical";
+	}
+	else if(severity == "high")
+	{
+		severityEmoji = "🟠";
+		severityLabel = "High";
+	}
+	else if(severity == "low")
+	{
+		severityEmoji = "🟢";
+		severityLabel = "Low";
+	}
+	// Format resource display
+	resourceDisplay = "N/A";
+	if(resource != "")
+	{
+		resourceDisplay = resource;
+	}
+	// Format notes display
+	notesDisplay = "None";
+	if(notes != "")
+	{
+		notesDisplay = notes;
+	}
+	// Build simple text response - NO slides, NO complex structures
+	responseText = "*✅ Incident Created Successfully!*\n\n";
+	responseText = responseText + "━━━━━━━━━━━━━━━━━━━━\n";
+	responseText = responseText + "🔖 *ID:* " + incidentId + "\n";
+	responseText = responseText + "📝 *Title:* " + title + "\n";
+	responseText = responseText + severityEmoji + " *Severity:* " + severityLabel + "\n";
+	responseText = responseText + "🔵 *Status:* Open\n";
+	responseText = responseText + "━━━━━━━━━━━━━━━━━━━━\n";
+	responseText = responseText + "👤 *Reported By:* " + userName + "\n";
+	responseText = responseText + "🔗 *Resource:* " + resourceDisplay + "\n";
+	responseText = responseText + "📋 *Notes:* " + notesDisplay;
+	response.put("text",responseText);
+	response.put("card",{"theme":"modern-inline"});
+	// Buttons built separately to avoid complex inline structures
+	btnViewAll = Map();
+	btnViewAll.put("label","📋 View All");
+	btnViewAll.put("hint","View all incidents");
+	btnViewAll.put("type","+");
+	btnViewAll.put("key","incident_list");
+	btnActionView = Map();
+	btnActionView.put("type","invoke.function");
+	btnActionView.put("data",{"name":"handleButton"});
+	btnViewAll.put("action",btnActionView);
+	btnDashboard = Map();
+	btnDashboard.put("label","🏠 Dashboard");
+	btnDashboard.put("hint","Return to dashboard");
+	btnDashboard.put("type","+");
+	btnDashboard.put("key","dashboard");
+	btnActionDash = Map();
+	btnActionDash.put("type","invoke.function");
+	btnActionDash.put("data",{"name":"handleButton"});
+	btnDashboard.put("action",btnActionDash);
+	buttonsList = List();
+	buttonsList.add(btnViewAll);
+	buttonsList.add(btnDashboard);
+	response.put("buttons",buttonsList);
+}
+// ============================================================================
+// ONBOARDING FORM
+// ============================================================================
+// SECTION: Onboarding Form Processing (awsOnboardingForm)
+// ============================================================================
+// Processes onboarding completion form (legacy - now handled by setupForm)
+// Sets default region and marks user as onboarded
+// ============================================================================
+else if(formName == "awsOnboardingForm")
+{
+	// Get form values
+	region = ifnull(formValues.get("region"),"ap-south-1");
+	consentCost = ifnull(formValues.get("consentCost"),false);
+	consentAi = ifnull(formValues.get("consentAi"),false);
+	// Create user preferences in awsprefs (preferences + consent)
+	newPrefsRecord = Map();
+	newPrefsRecord.put("userid",userId);
+	newPrefsRecord.put("username",userName);
+	newPrefsRecord.put("region",region);
+	newPrefsRecord.put("costthreshold",50);
+	newPrefsRecord.put("channel","");
+	newPrefsRecord.put("consentcost",consentCost);
+	newPrefsRecord.put("consentai",consentAi);
+	newPrefsRecord.put("consentlambda",false);
+	zoho.cliq.createRecord("awsprefs",newPrefsRecord);
+	// Create schedule settings in awsschedule
+	// IMPORTANT: Zoho Cliq DB stores booleans as "TRUE"/"FALSE" strings
+	newScheduleRecord = Map();
+	newScheduleRecord.put("userid",userId);
+	newScheduleRecord.put("username",userName);
+	newScheduleRecord.put("alertsenabled","TRUE");
+	newScheduleRecord.put("dailycost","FALSE");
+	newScheduleRecord.put("weeklysummary","FALSE");
+	zoho.cliq.createRecord("awsschedule",newScheduleRecord);
+	// Handle consent if given
+	if(consentCost == true || consentAi == true)
+	{
+		if(consentCost == true)
+		{
+			requestBody = Map();
+			requestBody.put("service","consent");
+			requestBody.put("action","grant");
+			requestBody.put("userId",userId);
+			requestBody.put("categoryId","cost_explorer");
+			invokeurl
+			[
+				url :API_URL
+				type :POST
+				parameters:requestBody.toString()
+				headers:{"Content-Type":"application/json"}
+				connection:"awscloudcommander"
+			]
+		}
+		if(consentAi == true)
+		{
+			requestBody = Map();
+			requestBody.put("service","consent");
+			requestBody.put("action","grant");
+			requestBody.put("userId",userId);
+			requestBody.put("categoryId","bedrock_ai");
+			invokeurl
+			[
+				url :API_URL
+				type :POST
+				parameters:requestBody.toString()
+				headers:{"Content-Type":"application/json"}
+				connection:"awscloudcommander"
+			]
+		}
+	}
+	response.put("text","*🎉 Welcome to AWS Cloud Commander!*\n\n" + "Your preferences have been saved.\n\n" + "Quick Start:\n" + "/aws - Dashboard\n" + "/aws ec2 - EC2 instances\n" + "/aws s3 - S3 buckets\n" + "/aws cost - Cost reports\n" + "/aws help - All commands");
+	response.put("card",{"theme":"modern-inline"});
+}
+// ============================================================================
+// ============================================================================
+// SECTION: Incident Update Form Processing (awsUpdateIncidentForm)
+// ============================================================================
+// Processes incident status update form submission
+// Updates incident record in awsincidents table with new status
+// Returns updated incident card with current status
+// ============================================================================
+else if(formName == "awsUpdateIncidentForm")
+{
+	incidentId = ifnull(formValues.get("incidentId"),"");
+	statusRaw = formValues.get("status");
+	notes = ifnull(formValues.get("notes"),"");
+	// Extract status value - handle both string and object formats (select returns object)
+	status = "open";
+	if(statusRaw != null)
+	{
+		statusValue = statusRaw.get("value");
+		if(statusValue != null)
+		{
+			status = statusValue.toString();
+		}
+		else
+		{
+			status = statusRaw.toString();
+		}
+	}
+	if(incidentId != "")
+	{
+		// Find the incident record
+		incidentQuery = Map();
+		incidentQuery.put("criteria","incidentid==" + incidentId);
+		incidents = zoho.cliq.getRecords("awsincidents",incidentQuery);
+		recordId = "";
+		incidentRecord = null;
+		if(incidents != null && incidents.get("status") == "SUCCESS")
+		{
+			incidentList = incidents.get("list");
+			if(incidentList != null && incidentList.size() > 0)
+			{
+				incidentRecord = incidentList.get(0);
+				if(incidentRecord != null)
+				{
+					recordId = ifnull(incidentRecord.get("id"),"");
+				}
+			}
+		}
+		if(recordId != "")
+		{
+			updateData = Map();
+			updateData.put("status",status);
+			updateData.put("updatedat",zoho.currenttime.toLong().toString());
+			if(notes != "" && incidentRecord != null)
+			{
+				existingNotes = ifnull(incidentRecord.get("notes"),"");
+				if(existingNotes != "")
+				{
+					updateData.put("notes",existingNotes + "\n---\n" + notes);
+				}
+				else
+				{
+					updateData.put("notes",notes);
+				}
+			}
+			if(status == "resolved" || status == "closed")
+			{
+				updateData.put("resolvedby",userId);
+			}
+			zoho.cliq.updateRecord("awsincidents",recordId,updateData);
+			statusEmoji = "🔵";
+			statusLabel = "Open";
+			if(status == "resolved")
+			{
+				statusEmoji = "✅";
+				statusLabel = "Resolved";
+			}
+			else if(status == "closed")
+			{
+				statusEmoji = "🔒";
+				statusLabel = "Closed";
+			}
+			else if(status == "investigating")
+			{
+				statusEmoji = "🔍";
+				statusLabel = "Investigating";
+			}
+			responseText = "*✅ Incident Updated!*\n\n";
+			responseText = responseText + "━━━━━━━━━━━━━━━━━━━━\n";
+			responseText = responseText + "🔖 *ID:* " + incidentId + "\n";
+			responseText = responseText + "📊 *New Status:* " + statusEmoji + " " + statusLabel + "\n";
+			if(notes != "")
+			{
+				responseText = responseText + "📋 *Notes Added:* " + notes + "\n";
+			}
+			responseText = responseText + "━━━━━━━━━━━━━━━━━━━━";
+			response.put("text",responseText);
+			response.put("card",{"theme":"modern-inline"});
+			// Add buttons using Map to avoid inline syntax issues
+			btnViewAll = Map();
+			btnViewAll.put("label","📋 View All");
+			btnViewAll.put("hint","View all incidents");
+			btnViewAll.put("type","+");
+			btnViewAll.put("key","incident_list");
+			btnActionView = Map();
+			btnActionView.put("type","invoke.function");
+			btnActionView.put("data",{"name":"handleButton"});
+			btnViewAll.put("action",btnActionView);
+			btnDashboard = Map();
+			btnDashboard.put("label","🏠 Dashboard");
+			btnDashboard.put("hint","Return to dashboard");
+			btnDashboard.put("type","+");
+			btnDashboard.put("key","dashboard");
+			btnActionDash = Map();
+			btnActionDash.put("type","invoke.function");
+			btnActionDash.put("data",{"name":"handleButton"});
+			btnDashboard.put("action",btnActionDash);
+			buttonsList = List();
+			buttonsList.add(btnViewAll);
+			buttonsList.add(btnDashboard);
+			response.put("buttons",buttonsList);
+			// Log to audit
+			logEntry = Map();
+			logEntry.put("logid","LOG-" + zoho.currenttime.toLong());
+			logEntry.put("userid",userId);
+			logEntry.put("username",userName);
+			logEntry.put("action","incident:update");
+			logEntry.put("resource","incident:" + incidentId);
+			logEntry.put("timestamp",zoho.currenttime.toLong().toString());
+			logEntry.put("result","success");
+			logEntry.put("details","Updated status to: " + status);
+			zoho.cliq.createRecord("awsauditlog",logEntry);
+		}
+		else
+		{
+			response.put("text","*Incident not found:* " + incidentId);
+			response.put("card",{"theme":"modern-inline"});
+		}
+	}
+	else
+	{
+		response.put("text","*Missing incident ID*");
+		response.put("card",{"theme":"modern-inline"});
+	}
+}
+// ============================================================================
+// SECTION: Incident Delete Form Processing (awsDeleteIncidentForm)
+// ============================================================================
+// Processes incident deletion confirmation form
+// Deletes incident record from awsincidents table
+// Returns success message
+// ============================================================================
+else if(formName == "awsDeleteIncidentForm")
+{
+	incidentId = ifnull(formValues.get("incidentId"),"");
+	confirm = ifnull(formValues.get("confirm"),"");
+	if(confirm.toUpperCase() != "DELETE")
+	{
+		return {"text":"*❌ Deletion cancelled.*\n\nYou must type 'DELETE' to confirm.","card":{"theme":"modern-inline"},"buttons":{{"label":"📋 List All","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"incident_list"}}};
+	}
+	if(incidentId != "")
+	{
+		// Find the incident record
+		incidentQuery = Map();
+		incidentQuery.put("criteria","incidentid==" + incidentId);
+		incidents = zoho.cliq.getRecords("awsincidents",incidentQuery);
+		recordId = "";
+		incidentTitle = "Unknown";
+		if(incidents != null && incidents.get("status") == "SUCCESS")
+		{
+			incidentList = incidents.get("list");
+			if(incidentList != null && incidentList.size() > 0)
+			{
+				incidentRecord = incidentList.get(0);
+				if(incidentRecord != null)
+				{
+					recordId = ifnull(incidentRecord.get("id"),"");
+					incidentTitle = ifnull(incidentRecord.get("title"),"Unknown");
+				}
+			}
+		}
+		if(recordId != "")
+		{
+			zoho.cliq.deleteRecord("awsincidents",recordId);
+			// Log to audit
+			logEntry = Map();
+			logEntry.put("logid","LOG-" + zoho.currenttime.toLong());
+			logEntry.put("userid",userId);
+			logEntry.put("username",userName);
+			logEntry.put("action","incident:delete");
+			logEntry.put("resource","incident:" + incidentId);
+			logEntry.put("timestamp",zoho.currenttime.toLong().toString());
+			logEntry.put("result","success");
+			logEntry.put("details","Deleted incident: " + incidentTitle);
+			zoho.cliq.createRecord("awsauditlog",logEntry);
+			return {"text":"*🗑️ Incident deleted successfully!*\n\n*Deleted:* " + incidentTitle,"card":{"theme":"modern-inline"},"buttons":{{"label":"📋 List All","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"incident_list"}}};
+		}
+		else
+		{
+			return {"text":"*❌ Incident not found.*","card":{"theme":"modern-inline"},"buttons":{{"label":"📋 List All","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"incident_list"}}};
+		}
+	}
+	else
+	{
+		return {"text":"*❌ Invalid incident ID.*","card":{"theme":"modern-inline"},"buttons":{{"label":"📋 List All","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"incident_list"}}};
+	}
+}
+// ============================================================================
+// ============================================================================
+// SECTION: Region Change Form Processing (awsRegionForm)
+// ============================================================================
+// Processes region change form submission
+// Updates default AWS region in awsprefs table
+// Returns confirmation card with new region
+// ============================================================================
+else if(formName == "awsRegionForm")
+{
+	region = ifnull(formValues.get("region"),"ap-south-1");
+	// Update user preferences
+	regionQuery = Map();
+	regionQuery.put("criteria","userid==" + userId);
+	existingRecords = zoho.cliq.getRecords("awsprefs",regionQuery);
+	// getRecords returns {"status":"SUCCESS","list":[...]}
+	recordId = "";
+	if(existingRecords != null && existingRecords.get("status") == "SUCCESS")
+	{
+		recordList = existingRecords.get("list");
+		if(recordList != null && recordList.size() > 0)
+		{
+			existingRecord = recordList.get(0);
+			if(existingRecord != null)
+			{
+				recordId = ifnull(existingRecord.get("id"),"");
+			}
+		}
+	}
+	if(recordId != "")
+	{
+		updateData = Map();
+		updateData.put("region",region);
+		zoho.cliq.updateRecord("awsprefs",recordId,updateData);
+	}
+	else
+	{
+		// Create awsprefs record (preferences + consent only)
+		newPrefsRecord = Map();
+		newPrefsRecord.put("userid",userId);
+		newPrefsRecord.put("username",userName);
+		newPrefsRecord.put("region",region);
+		newPrefsRecord.put("costthreshold",50);
+		newPrefsRecord.put("channel","");
+		newPrefsRecord.put("consentcost",false);
+		newPrefsRecord.put("consentai",false);
+		newPrefsRecord.put("consentlambda",false);
+		zoho.cliq.createRecord("awsprefs",newPrefsRecord);
+		// Also create awsschedule record (schedule-related only)
+		// IMPORTANT: Zoho Cliq DB stores booleans as "TRUE"/"FALSE" strings
+		newScheduleRecord = Map();
+		newScheduleRecord.put("userid",userId);
+		newScheduleRecord.put("username",userName);
+		newScheduleRecord.put("alertsenabled","TRUE");
+		newScheduleRecord.put("dailycost","FALSE");
+		newScheduleRecord.put("weeklysummary","FALSE");
+		zoho.cliq.createRecord("awsschedule",newScheduleRecord);
+	}
+	response.put("text","*🌍 Region Changed!*\n\nNew region: " + region);
+	response.put("card",{"theme":"modern-inline"});
+}
+// ============================================================================
+// SECTION: AI Assistant Form Processing (awsAiForm)
+// ============================================================================
+// Processes AI Assistant question form submission
+// Validates user consent (consentai flag) before calling Amazon Bedrock
+// Sends question to backend Bedrock service and returns AI response
+// Requires consent due to $0.01-0.15 per query cost
+// ============================================================================
+else if(formName == "awsAiForm")
+{
+	question = ifnull(formValues.get("question"),"");
+	aiMode = ifnull(formValues.get("mode"),"general");
+	if(question == "")
+	{
+		response.put("text","*Please enter a question*");
+		response.put("card",{"theme":"modern-inline"});
+	}
+	else
+	{
+		// Check if user has AI consent in Cliq database first
+		aiConsentQuery = Map();
+		aiConsentQuery.put("criteria","userid==" + userId);
+		userPrefs = zoho.cliq.getRecords("awsprefs",aiConsentQuery);
+		hasAiConsent = false;
+		// getRecords returns {"status":"SUCCESS","list":[...]}
+		if(userPrefs != null && userPrefs.get("status") == "SUCCESS")
+		{
+			prefList = userPrefs.get("list");
+			if(prefList != null && prefList.size() > 0)
+			{
+				userPref = prefList.get(0);
+				if(userPref != null)
+				{
+					consentValue = userPref.get("consentai");
+					// Handle boolean, string, and numeric values from database
+					if(consentValue == true || consentValue == "true" || consentValue == 1 || consentValue == "1")
+					{
+						hasAiConsent = true;
+					}
+				}
+			}
+		}
+		if(hasAiConsent == false)
+		{
+			// User has not consented in Cliq DB - show consent prompt
+			response.put("text","*⚠️ AI Assistant Requires Consent*\n\n" + "This feature uses *AWS Bedrock* which incurs costs:\n\n" + "💰 *Pricing:*\n" + "• ~$0.01 - $0.15 per query\n\n" + "By enabling, you agree to these charges.");
+			response.put("card",{"theme":"modern-inline"});
+			response.put("buttons",{{"label":"Enable AI","hint":"I agree to AI charges","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"consent_grant_bedrock_ai"},{"label":"Cancel","hint":"Return to dashboard","type":"-","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"dashboard"}});
+		}
+		else
+		{
+			// User has consent in Cliq DB - proceed with API call
+			requestBody = Map();
+			requestBody.put("service","bedrock");
+			requestBody.put("action","chat");
+			requestBody.put("prompt",question);
+			requestBody.put("mode",aiMode);
+			requestBody.put("userId",userId);
+			requestBody.put("region","us-east-1");
+			requestBody.put("consent",true);
+			apiResponse = invokeurl
+			[
+				url :API_URL
+				type :POST
+				parameters:requestBody.toString()
+				headers:{"Content-Type":"application/json"}
+				connection:"awscloudcommander"
+			];
+			// Safely check API response
+			apiSuccess = false;
+			apiError = "Unknown error";
+			if(apiResponse != null)
+			{
+				apiSuccess = ifnull(apiResponse.get("success"),false);
+				apiError = ifnull(apiResponse.get("error"),"Unknown error");
+			}
+			if(apiSuccess == true)
+			{
+				data = apiResponse.get("data");
+				aiResponse = "No response generated.";
+				if(data != null)
+				{
+					aiResponse = ifnull(data.get("response"),"No response generated.");
+				}
+				// Map mode to display name
+				modeDisplay = "General";
+				if(aiMode == "troubleshoot")
+				{
+					modeDisplay = "🔧 Troubleshoot";
+				}
+				else if(aiMode == "optimize")
+				{
+					modeDisplay = "💰 Cost Optimization";
+				}
+				else if(aiMode == "security")
+				{
+					modeDisplay = "🔒 Security Review";
+				}
+				else if(aiMode == "architecture")
+				{
+					modeDisplay = "🏗️ Architecture";
+				}
+				else
+				{
+					modeDisplay = "💬 General";
+				}
+				response.put("text","*🤖 AI Response* (" + modeDisplay + ")\n\n" + aiResponse);
+				response.put("card",{"theme":"modern-inline"});
+				response.put("buttons",{{"label":"Ask Again","hint":"Ask another question","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ai_form"},{"label":"Dashboard","hint":"Return to dashboard","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"dashboard"}});
+			}
+			else
+			{
+				response.put("text","🤖 *AI Error*\n\n" + apiError);
+				response.put("card",{"title":"🤖 AI Error","theme":"prompt"});
+				response.put("buttons",{{"label":"Try Again","hint":"Ask another question","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"ai_form"},{"label":"Dashboard","hint":"Return to dashboard","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"dashboard"}});
+			}
+			// Log to audit
+			logEntry = Map();
+			logEntry.put("logid","LOG-" + zoho.currenttime.toLong());
+			logEntry.put("userid",userId);
+			logEntry.put("username",userName);
+			logEntry.put("action","ai:query");
+			logEntry.put("resource","bedrock");
+			logEntry.put("timestamp",zoho.currenttime.toLong().toString());
+			logResult = "failed";
+			if(apiSuccess == true)
+			{
+				logResult = "success";
+			}
+			logEntry.put("result",logResult);
+			questionPreview = question;
+			if(question.length() > 50)
+			{
+				questionPreview = question.subString(0,50);
+			}
+			logEntry.put("details","AI query: " + questionPreview);
+			zoho.cliq.createRecord("awsauditlog",logEntry);
+		}
+	}
+}
+// ============================================================================
+// ============================================================================
+// SECTION: Lambda Invocation Form Processing (awsLambdaInvokeForm)
+// ============================================================================
+// Processes Lambda function invocation form submission
+// Validates user consent (consentlambda flag) before invoking function
+// Supports synchronous, asynchronous, and dry-run invocation types
+// Sends notification to configured channel after successful invocation
+// Requires consent due to standard Lambda pricing
+// ============================================================================
+else if(formName == "awsLambdaInvokeForm")
+{
+	funcNameRaw = ifnull(formValues.get("functionName"),"");
+	payloadRaw = ifnull(formValues.get("payload"),"");
+	invocationTypeRaw = formValues.get("invocationType");
+	// Extract invocation type value
+	invocationType = "RequestResponse";
+	if(invocationTypeRaw != null)
+	{
+		invTypeValue = invocationTypeRaw.get("value");
+		if(invTypeValue != null)
+		{
+			invocationType = invTypeValue.toString();
+		}
+		else
+		{
+			invocationType = invocationTypeRaw.toString();
+		}
+	}
+	// Clean and validate function name (remove any quotes, extra whitespace, etc.)
+	funcName = funcNameRaw.trim();
+	funcName = funcName.replaceAll("\"","").replaceAll("'","").trim();
+	// Validate function name format (AWS Lambda allows: letters, numbers, hyphens, underscores, dots)
+	// Remove any invalid characters that might have been added
+	funcNameClean = "";
+	allowedChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.";
+	for each  char in funcName.toList("")
+	{
+		// Check if character is in allowed characters string
+		if(allowedChars.contains(char))
+		{
+			funcNameClean = funcNameClean + char;
+		}
+	}
+	funcName = funcNameClean;
+	if(funcName == "")
+	{
+		response.put("text","⚡ *Error*\n\nFunction name is required. Function name must contain only letters, numbers, hyphens, underscores, and dots.");
+		response.put("card",{"title":"⚡ Lambda Error","theme":"prompt"});
+	}
+	else
+	{
+		// Check if user has Lambda consent in Cliq database first
+		lambdaConsentQuery = Map();
+		lambdaConsentQuery.put("criteria","userid==" + userId);
+		userPrefs = zoho.cliq.getRecords("awsprefs",lambdaConsentQuery);
+		hasLambdaConsent = false;
+		if(userPrefs != null && userPrefs.get("status") == "SUCCESS")
+		{
+			prefList = userPrefs.get("list");
+			if(prefList != null && prefList.size() > 0)
+			{
+				userPref = prefList.get(0);
+				if(userPref != null)
+				{
+					consentValue = userPref.get("consentlambda");
+					if(consentValue == true || consentValue == "true" || consentValue == 1 || consentValue == "1")
+					{
+						hasLambdaConsent = true;
+					}
+				}
+			}
+		}
+		if(hasLambdaConsent == false)
+		{
+			// User has not consented - show consent prompt
+			response.put("text","*⚠️ Lambda Invocation Requires Consent*\n\n" + "Invoking Lambda functions uses your *AWS Lambda quota* and may incur costs:\n\n" + "💰 *Pricing:*\n" + "• Depends on your Lambda function configuration\n" + "• Uses your AWS account's Lambda quota\n\n" + "By enabling, you agree to these potential charges.");
+			response.put("card",{"theme":"modern-inline"});
+			response.put("buttons",{{"label":"⚡ Enable Lambda","hint":"I agree to Lambda charges","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"consent_grant_lambda_invoke"},{"label":"Cancel","hint":"Return to functions list","type":"-","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_list"}});
+		}
+		else
+		{
+			// User has consent - proceed with invocation
+			// Parse payload if provided
+			payload = null;
+			payloadError = "";
+			if(payloadRaw != "" && payloadRaw != null)
+			{
+				// Try to validate JSON
+				payloadRaw = payloadRaw.trim();
+				if(payloadRaw.startsWith("{") || payloadRaw.startsWith("["))
+				{
+					// Attempt to parse - will use as-is since Deluge doesn't have JSON.parse
+					payload = payloadRaw;
+				}
+				else
+				{
+					payloadError = "Payload must be valid JSON";
+				}
+			}
+			if(payloadError != "")
+			{
+				response.put("text","⚡ *Error*\n\n" + payloadError);
+				response.put("card",{"title":"⚡ Lambda Error","theme":"prompt"});
+			}
+			else
+			{
+				// Call backend to invoke Lambda
+				requestBody = Map();
+				requestBody.put("service","lambda");
+				requestBody.put("region",userRegion);
+				requestBody.put("action","invoke");
+				requestBody.put("functionName",funcName);
+				requestBody.put("invocationType",invocationType);
+				requestBody.put("userId",userId);
+				requestBody.put("consent",true);
+				if(payload != null)
+				{
+					requestBody.put("payload",payload);
+				}
+				apiResponse = invokeurl
+				[
+					url :"https://aws-cloudops-906900311.development.catalystserverless.com/server/aws_handler/"
+					type :POST
+					parameters:requestBody.toString()
+					headers:{"Content-Type":"application/json"}
+					connection:"awscloudcommander"
+				];
+				// Check for null or non-map response
+				apiSuccess = false;
+				apiError = "Unknown error";
+				errorCode = "";
+				if(apiResponse != null)
+				{
+					apiSuccess = ifnull(apiResponse.get("success"),false);
+					apiError = ifnull(apiResponse.get("error"),"");
+					errorCode = ifnull(apiResponse.get("code"),"");
+					// Also check for suggestion in error response
+					apiSuggestion = apiResponse.get("suggestion");
+					if(apiError == "" || apiError == null)
+					{
+						if(apiSuggestion != null)
+						{
+							apiError = apiSuggestion;
+						}
+						else
+						{
+							// Try to show raw response for debugging
+							apiError = "No error message. Response: " + apiResponse.toString().subString(0,200);
+						}
+					}
+				}
+				else
+				{
+					apiError = "No response from server";
+				}
+				// Check if function doesn't exist
+				if(apiSuccess == false && (errorCode == "ResourceNotFoundException" || apiError.contains("Function not found") || apiError.contains("does not exist") || apiError.contains("ResourceNotFoundException")))
+				{
+					response.put("text","⚡ *Lambda Function Not Found*\n\nNo Lambda function exists with the name: `" + funcName + "`\n\nPlease check:\n• Function name spelling\n• Function exists in region: " + userRegion + "\n• You have permission to access this function");
+					response.put("card",{"title":"⚡ Lambda Error","theme":"prompt"});
+					response.put("buttons",{{"label":"📋 List Functions","hint":"View available functions","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_list"},{"label":"🏠 Dashboard","hint":"Return to dashboard","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"dashboard"}});
+				}
+				else if(apiSuccess == true)
+				{
+					data = apiResponse.get("data");
+					statusCode = ifnull(data.get("statusCode"),"—");
+					duration = ifnull(data.get("duration"),"—");
+					billedDuration = ifnull(data.get("billedDuration"),"—");
+					funcError = ifnull(data.get("functionError"),"");
+					invokeResponse = data.get("response");
+					// Check if this was an async invocation
+					if(invocationType == "Event")
+					{
+						// Async invocation - function is running in background
+						responseText = "*🚀 Lambda Function Triggered (Async)*\n\n";
+						responseText = responseText + "━━━━━━━━━━━━━━━━━━━━\n";
+						responseText = responseText + "⚡ *Function:* " + funcName + "\n";
+						responseText = responseText + "📊 *Status:* Queued for execution\n";
+						responseText = responseText + "━━━━━━━━━━━━━━━━━━━━\n\n";
+						responseText = responseText + "ℹ️ *Asynchronous invocations run in the background.*\n";
+						responseText = responseText + "Check the logs to see the function output.";
+					}
+					else if(invocationType == "DryRun")
+					{
+						// Dry run - just validation
+						responseText = "*✅ Dry Run Successful*\n\n";
+						responseText = responseText + "━━━━━━━━━━━━━━━━━━━━\n";
+						responseText = responseText + "⚡ *Function:* " + funcName + "\n";
+						responseText = responseText + "📊 *Status:* Validation passed\n";
+						responseText = responseText + "━━━━━━━━━━━━━━━━━━━━\n\n";
+						responseText = responseText + "ℹ️ *The function was not actually invoked.*\n";
+						responseText = responseText + "This confirms you have permission to invoke it.";
+					}
+					else
+					{
+						// Synchronous invocation - we have a response
+						// Format response
+						responseDisplay = "null";
+						if(invokeResponse != null)
+						{
+							responseDisplay = invokeResponse.toString();
+							// Truncate if too long
+							if(responseDisplay.length() > 500)
+							{
+								responseDisplay = responseDisplay.subString(0,497) + "...";
+							}
+						}
+						// Build result text
+						resultEmoji = "✅";
+						resultStatus = "Success";
+						if(funcError != "")
+						{
+							resultEmoji = "❌";
+							resultStatus = "Error: " + funcError;
+						}
+						responseText = "*" + resultEmoji + " Lambda Invocation Result*\n\n";
+						responseText = responseText + "━━━━━━━━━━━━━━━━━━━━\n";
+						responseText = responseText + "⚡ *Function:* " + funcName + "\n";
+						responseText = responseText + "📊 *Status:* " + resultStatus + "\n";
+						responseText = responseText + "⏱️ *Duration:* " + duration + " ms\n";
+						if(billedDuration != "—" && billedDuration != null)
+						{
+							responseText = responseText + "💵 *Billed:* " + billedDuration + " ms\n";
+						}
+						responseText = responseText + "━━━━━━━━━━━━━━━━━━━━\n";
+						responseText = responseText + "*Response:*\n```\n" + responseDisplay + "\n```";
+					}
+					response.put("text",responseText);
+					response.put("card",{"theme":"modern-inline"});
+					// Build buttons - order depends on invocation type
+					btnInvokeAgain = Map();
+					btnInvokeAgain.put("label","▶️ Invoke Again");
+					btnInvokeAgain.put("hint","Run function again");
+					btnInvokeAgain.put("type","+");
+					btnInvokeAgain.put("key","lambda_invoke_" + funcName);
+					btnInvokeAction = Map();
+					btnInvokeAction.put("type","invoke.function");
+					btnInvokeAction.put("data",{"name":"handleButton"});
+					btnInvokeAgain.put("action",btnInvokeAction);
+					btnLogs = Map();
+					// For async invocations, emphasize logs button
+					if(invocationType == "Event")
+					{
+						btnLogs.put("label","📋 View Logs");
+						btnLogs.put("hint","See function execution results");
+					}
+					else
+					{
+						btnLogs.put("label","📋 Logs");
+						btnLogs.put("hint","View function logs");
+					}
+					btnLogs.put("type","+");
+					btnLogs.put("key","lambda_logs_" + funcName);
+					btnLogsAction = Map();
+					btnLogsAction.put("type","invoke.function");
+					btnLogsAction.put("data",{"name":"handleButton"});
+					btnLogs.put("action",btnLogsAction);
+					btnList = Map();
+					btnList.put("label","📋 List All");
+					btnList.put("hint","View all functions");
+					btnList.put("type","+");
+					btnList.put("key","lambda_list");
+					btnListAction = Map();
+					btnListAction.put("type","invoke.function");
+					btnListAction.put("data",{"name":"handleButton"});
+					btnList.put("action",btnListAction);
+					buttonsList = List();
+					// For async invocations, put logs button first
+					if(invocationType == "Event")
+					{
+						buttonsList.add(btnLogs);
+						buttonsList.add(btnInvokeAgain);
+					}
+					else
+					{
+						buttonsList.add(btnInvokeAgain);
+						buttonsList.add(btnLogs);
+					}
+					buttonsList.add(btnList);
+					response.put("buttons",buttonsList);
+					// Log to audit
+					logEntry = Map();
+					logEntry.put("logid","LOG-" + zoho.currenttime.toLong());
+					logEntry.put("userid",userId);
+					logEntry.put("username",userName);
+					logEntry.put("action","lambda:invoke");
+					logEntry.put("resource","lambda:" + funcName);
+					logEntry.put("timestamp",zoho.currenttime.toLong().toString());
+					logResult = "success";
+					if(funcError != "")
+					{
+						logResult = "error";
+					}
+					logEntry.put("result",logResult);
+					logEntry.put("details","duration=" + duration + "ms");
+					zoho.cliq.createRecord("awsauditlog",logEntry);
+					// Send notification using dynamic notification system
+					channelMsg = Map();
+					invokeTypeText = "Synchronous";
+					if(invocationType == "Event")
+					{
+						invokeTypeText = "Asynchronous";
+					}
+					else if(invocationType == "DryRun")
+					{
+						invokeTypeText = "Dry Run";
+					}
+					channelMsg.put("text","*⚡ Lambda Function Invoked*\n\n👤 By: " + userName + "\n⚡ Function: `" + funcName + "`\n📊 Type: " + invokeTypeText + "\n⏱️ Duration: " + duration + " ms\n📊 Status: " + resultStatus + "\n🕐 Time: " + zoho.currenttime.toString("dd MMM yyyy, hh:mm a"));
+					channelMsg.put("card",{"theme":"modern-inline"});
+					channelMsg.put("buttons",{{"label":"📋 Logs","hint":"View function logs","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_logs_" + funcName}});
+					// Get notification channel for Lambda
+					notifyChannel = "";
+					notifQuery = Map();
+					notifQuery.put("criteria","userid==" + userId.toString());
+					allUserRecords = zoho.cliq.getRecords("awsnotifications",notifQuery);
+					if(allUserRecords != null && allUserRecords.get("status") == "SUCCESS")
+					{
+						notifList = allUserRecords.get("list");
+						if(notifList != null && notifList.size() > 0)
+						{
+							for each  notifRecord in notifList
+							{
+								if(notifRecord != null && ifnull(notifRecord.get("userid"),"").toString() == userId.toString() && ifnull(notifRecord.get("notificationtype"),"") == "lambda")
+								{
+									enabledVal = notifRecord.get("enabled");
+									if(enabledVal == "TRUE" || enabledVal == true || enabledVal == "true" || enabledVal == 1 || enabledVal == "1")
+									{
+										channelRaw = ifnull(notifRecord.get("channel"),"");
+										if(channelRaw != null && channelRaw != "")
+										{
+											// Extract channel name (handles object, JSON string, or plain string)
+											try 
+											{
+												if(channelRaw.get("unique_name") != null)
+												{
+													notifyChannel = channelRaw.get("unique_name").toString();
+												}
+												else if(channelRaw.get("name") != null)
+												{
+													notifyChannel = channelRaw.get("name").toString();
+												}
+											}
+											catch (e)
+											{
+												notifyChannel = channelRaw.toString();
+											}
+											if(notifyChannel == "")
+											{
+												notifyChannel = channelRaw.toString();
+											}
+											// Remove # prefix and handle JSON strings
+											if(notifyChannel.startsWith("{"))
+											{
+												if(notifyChannel.contains("\"unique_name\""))
+												{
+													startIdx = notifyChannel.indexOf("\"unique_name\"");
+													valueStart = notifyChannel.indexOf("\"",startIdx + 13) + 1;
+													valueEnd = notifyChannel.indexOf("\"",valueStart);
+													if(valueStart > 0 && valueEnd > valueStart)
+													{
+														notifyChannel = notifyChannel.subString(valueStart,valueEnd);
+													}
+												}
+											}
+											if(notifyChannel.startsWith("#"))
+											{
+												notifyChannel = notifyChannel.subString(1);
+											}
+											break;
+										}
+									}
+								}
+							}
+						}
+					}
+					// Fallback to old system
+					if(notifyChannel == "")
+					{
+						prefsQuery = Map();
+						prefsQuery.put("criteria","userid==" + userId);
+						prefsRecords = zoho.cliq.getRecords("awsprefs",prefsQuery);
+						if(prefsRecords != null && prefsRecords.get("status") == "SUCCESS")
+						{
+							prefsList = prefsRecords.get("list");
+							if(prefsList != null && prefsList.size() > 0)
+							{
+								notifyChannel = ifnull(prefsList.get(0).get("channel"),"");
+								if(notifyChannel.startsWith("#"))
+								{
+									notifyChannel = notifyChannel.subString(1);
+								}
+							}
+						}
+					}
+					// Send notification
+					if(notifyChannel != "" && notifyChannel != null)
+					{
+						zoho.cliq.postToChannelAsBot(notifyChannel,"awscloudcommander",channelMsg);
+					}
+				}
+				else
+				{
+					response.put("text","⚡ *Lambda Invoke Failed*\n\n" + apiError);
+					response.put("card",{"title":"⚡ Invoke Error","theme":"prompt"});
+					response.put("buttons",{{"label":"📋 List Functions","hint":"View available functions","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"lambda_list"},{"label":"🏠 Dashboard","hint":"Return to dashboard","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"dashboard"}});
+				}
+			}
+		}
+	}
+}
+// ============================================================================
+// ============================================================================
+// SECTION: S3 File Upload Form Processing (s3_upload)
+// ============================================================================
+// Processes S3 file upload form submission
+// Handles multipart file uploads to specified S3 bucket
+// Uses backend upload endpoint with multipart/form-data
+// Returns success card with uploaded file details
+// ============================================================================
+else if(formName == "s3_upload")
+{
+	bucket = ifnull(formValues.get("bucket"),"");
+	prefix = ifnull(formValues.get("prefix"),"");
+	filesData = formValues.get("files");
+	if(bucket == "" || filesData == null)
+	{
+		response.put("text","📦 *S3 Upload Error*\n\nBucket and files are required.");
+		response.put("card",{"title":"📦 S3 Error","theme":"prompt"});
+	}
+	else
+	{
+		// filesData is a list of file objects when multiple files are selected
+		// Create file list for upload - add all files with proper param name
+		fileList = List();
+		// Handle both single file and multiple files
+		// When multiple=true, Cliq always returns a list even for single file
+		// Use size() to check - lists have size(), file objects don't
+		isMultiple = false;
+		fileCount = 0;
+		// Try to get size - if it works, it's a list
+		try
+		{
+			fileCount = filesData.size();
+			if(fileCount > 0)
+			{
+				isMultiple = true;
+			}
+		}
+		catch(e)
+		{
+			// Not a list - treat as single file
+			isMultiple = false;
+		}
+		if(isMultiple)
+		{
+			// Multiple files - iterate and add each
+			for each  fileItem in filesData
+			{
+				fileItem.setParamName("files");
+				fileList.add(fileItem);
+			}
+		}
+		else
+		{
+			// Single file (shouldn't happen with multiple=true, but just in case)
+			filesData.setParamName("files");
+			fileList.add(filesData);
+		}
+		// Create metadata as string part
+		metaData = Map();
+		metaData.put("userId",userId);
+		metaData.put("bucket",bucket);
+		metaData.put("prefix",prefix);
+		metaPart = Map();
+		metaPart.put("stringPart","true");
+		metaPart.put("paramName","metadata");
+		metaPart.put("content",metaData.toString());
+		metaPart.put("contentType","application/json");
+		fileList.add(metaPart);
+		// Upload files directly to backend using files parameter
+		apiResponse = invokeurl
+		[
+			url :UPLOAD_URL
+			type :POST
+			files:fileList
+			connection:"awscloudcommander"
+		];
+		if(apiResponse != null && apiResponse.get("success") == true)
+		{
+			data = apiResponse.get("data");
+			successCount = ifnull(data.get("successCount"),0);
+			failCount = ifnull(data.get("failCount"),0);
+			totalFiles = ifnull(data.get("totalFiles"),0);
+			uploadedFiles = ifnull(data.get("uploaded"),List());
+			// Build success message
+			resultText = "*✅ S3 Upload Complete*\n\n";
+			resultText = resultText + "📦 **Bucket:** `" + bucket + "`\n";
+			if(prefix != "")
+			{
+				resultText = resultText + "📁 **Folder:** `" + prefix + "`\n";
+			}
+			resultText = resultText + "\n**Results:** " + successCount + "/" + totalFiles + " files uploaded\n\n";
+			// List uploaded files
+			if(uploadedFiles.size() > 0)
+			{
+				for each  uploaded in uploadedFiles
+				{
+					fileName = ifnull(uploaded.get("fileName"),"");
+					fileSize = ifnull(uploaded.get("sizeFormatted"),"");
+					resultText = resultText + "✅ " + fileName + " (" + fileSize + ")\n";
+				}
+			}
+			// Show errors if any
+			errors = data.get("errors");
+			if(errors != null && errors.size() > 0)
+			{
+				resultText = resultText + "\n⚠️ **Failed:**\n";
+				for each  err in errors
+				{
+					errFile = ifnull(err.get("fileName"),"");
+					errMsg = ifnull(err.get("error"),"Unknown error");
+					resultText = resultText + "❌ " + errFile + ": " + errMsg + "\n";
+				}
+			}
+			response.put("text",resultText);
+			response.put("card",{"theme":"modern-inline"});
+			response.put("buttons",{{"label":"📦 Browse Bucket","hint":"Browse " + bucket,"type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_browse_" + bucket},{"label":"📤 Upload More","hint":"Upload more files","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_upload_form_" + bucket + "_" + prefix}});
+		}
+		else
+		{
+			response.put("text","📦 *S3 Upload Error*\n\n" + ifnull(apiResponse.get("error"),"Unknown error"));
+			response.put("card",{"title":"📦 S3 Error","theme":"prompt"});
+			response.put("buttons",{{"label":"📦 Browse Bucket","hint":"Browse " + bucket,"type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_browse_" + bucket}});
+		}
+	}
+}
+// ============================================================================
+// ============================================================================
+// SECTION: S3 Search Form Processing (s3_search)
+// ============================================================================
+// Processes S3 bucket search form submission
+// Searches for files matching search term in specified bucket
+// Returns results as table with file keys and sizes
+// Supports pagination for large result sets
+// ============================================================================
+else if(formName == "s3_search")
+{
+	bucket = ifnull(formValues.get("bucket"),"");
+	searchTerm = ifnull(formValues.get("searchTerm"),"");
+	if(bucket == "" || searchTerm == "")
+	{
+		response.put("text","📦 *S3 Search Error*\n\nBucket and search term are required.");
+		response.put("card",{"title":"📦 S3 Error","theme":"prompt"});
+	}
+	else
+	{
+		requestBody = Map();
+		requestBody.put("service","s3");
+		requestBody.put("userId",userId);
+		requestBody.put("region",userRegion);
+		requestBody.put("action","search");
+		requestBody.put("bucket",bucket);
+		requestBody.put("searchTerm",searchTerm);
+		apiResponse = invokeurl
+		[
+			url :API_URL
+			type :POST
+			parameters:requestBody.toString()
+			headers:{"Content-Type":"application/json"}
+			connection:"awscloudcommander"
+		];
+		if(apiResponse.get("success") == true)
+		{
+			data = apiResponse.get("data");
+			matches = ifnull(data.get("matches"),List());
+			totalMatches = ifnull(data.get("totalMatches"),0);
+			if(totalMatches == 0)
+			{
+				response.put("text","*🔍 S3 Search Results*\n\nNo files matching `" + searchTerm + "` found in `" + bucket + "`");
+				response.put("card",{"theme":"modern-inline"});
+				response.put("buttons",{{"label":"📦 Browse Bucket","hint":"Browse " + bucket,"type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_browse_" + bucket},{"label":"🔍 Search Again","hint":"New search","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_search_form_" + bucket}});
+			}
+			else
+			{
+				fileRows = List();
+				for each  file in matches
+				{
+					fileName = ifnull(file.get("name"),"");
+					fileKey = ifnull(file.get("key"),"");
+					fileSize = ifnull(file.get("sizeFormatted"),"-");
+					// Build inline action buttons like EC2 - Label is tooltip text
+					downloadBtn = "[+📥 Download](invoke.function|handleButton||s3_download_" + bucket + "_" + fileKey + ")";
+					infoBtn = "[+ℹ️ Info](invoke.function|handleButton||s3_object_" + bucket + "_" + fileKey + ")";
+					deleteBtn = "[-🗑️ Delete](invoke.function|handleButton||s3_delete_" + bucket + "_" + fileKey + ")";
+					row = Map();
+					row.put("Name","📄 " + fileName);
+					row.put("Size",fileSize);
+					row.put("",downloadBtn + " " + infoBtn + " " + deleteBtn);
+					fileRows.add(row);
+				}
+				response.put("text","*🔍 Search: `" + searchTerm + "` in `" + bucket + "`*\n\nFound " + totalMatches + " matching file(s)");
+				response.put("card",{"theme":"modern-inline"});
+				response.put("slides",{{"type":"table","title":"Results","data":{"headers":{"Name","Size",""},"rows":fileRows}}});
+				response.put("buttons",{{"label":"🔍 Search Again","hint":"New search","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_search_form_" + bucket},{"label":"📦 Browse Bucket","hint":"Browse bucket","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_browse_" + bucket},{"label":"📦 All Buckets","hint":"View all buckets","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_refresh"}});
+			}
+		}
+		else
+		{
+			response.put("text","📦 *S3 Search Error*\n\n" + ifnull(apiResponse.get("error"),"Unknown error"));
+			response.put("card",{"title":"📦 S3 Error","theme":"prompt"});
+			response.put("buttons",{{"label":"📦 Browse Bucket","hint":"Browse " + bucket,"type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_browse_" + bucket}});
+		}
+	}
+}
+// ============================================================================
+// ============================================================================
+// SECTION: S3 Bucket Creation Form Processing (s3_create_bucket)
+// ============================================================================
+// Processes S3 bucket creation form submission
+// Validates bucket name (lowercase, no spaces, unique)
+// Creates bucket via backend API
+// Sends notification to configured channel after successful creation
+// ============================================================================
+else if(formName == "s3_create_bucket")
+{
+	bucketName = ifnull(formValues.get("bucketName"),"");
+	// Handle region - Cliq select returns object with value property
+	regionValue = formValues.get("region");
+	region = "ap-south-1";
+	if(regionValue != null)
+	{
+		if(regionValue.get("value") != null)
+		{
+			region = regionValue.get("value");
+		}
+		else
+		{
+			region = regionValue.toString();
+		}
+	}
+	if(bucketName == "")
+	{
+		response.put("text","📦 *Create Bucket Error*\n\nBucket name is required.");
+		response.put("card",{"title":"📦 S3 Error","theme":"prompt"});
+	}
+	else
+	{
+		// Validate bucket name locally first
+		bucketName = bucketName.toLowerCase().trim();
+		requestBody = Map();
+		requestBody.put("service","s3");
+		requestBody.put("userId",userId);
+		requestBody.put("region",userRegion);
+		requestBody.put("action","createBucket");
+		requestBody.put("bucket",bucketName);
+		requestBody.put("region",region);
+		apiResponse = invokeurl
+		[
+			url :API_URL
+			type :POST
+			parameters:requestBody.toString()
+			headers:{"Content-Type":"application/json"}
+			connection:"awscloudcommander"
+		];
+		if(apiResponse.get("success") == true)
+		{
+			data = apiResponse.get("data");
+			response.put("text","*✅ Bucket Created Successfully!*\n\n📦 Bucket: `" + bucketName + "`\n🌍 Region: " + region);
+			response.put("card",{"theme":"modern-inline"});
+			response.put("buttons",{{"label":"📂 Browse Bucket","hint":"View bucket contents","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_browse_" + bucketName},{"label":"📦 All Buckets","hint":"View all buckets","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_refresh"}});
+			// Post notification to channel if configured (channel is in awsprefs)
+			prefsQuery = Map();
+			prefsQuery.put("criteria","userid==" + userId);
+			prefsRecords = zoho.cliq.getRecords("awsprefs",prefsQuery);
+			if(prefsRecords != null && prefsRecords.get("status") == "SUCCESS")
+			{
+				prefsList = prefsRecords.get("list");
+				// Send notification using dynamic notification system
+				channelMsg = Map();
+				channelMsg.put("text","*📦 S3 Bucket Created*\n\n👤 By: " + userName + "\n📦 Bucket: `" + bucketName + "`\n🌍 Region: " + region + "\n🕐 Time: " + zoho.currenttime.toString("dd MMM yyyy, hh:mm a"));
+				channelMsg.put("card",{"theme":"modern-inline"});
+				channelMsg.put("buttons",{{"label":"📂 Browse Bucket","hint":"View bucket","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_browse_" + bucketName}});
+				// Get notification channel for S3
+				notifyChannel = "";
+				notifQuery = Map();
+				notifQuery.put("criteria","userid==" + userId.toString());
+				allUserRecords = zoho.cliq.getRecords("awsnotifications",notifQuery);
+				if(allUserRecords != null && allUserRecords.get("status") == "SUCCESS")
+				{
+					notifList = allUserRecords.get("list");
+					if(notifList != null && notifList.size() > 0)
+					{
+						for each  notifRecord in notifList
+						{
+							if(notifRecord != null && ifnull(notifRecord.get("userid"),"").toString() == userId.toString() && ifnull(notifRecord.get("notificationtype"),"") == "s3")
+							{
+								enabledVal = notifRecord.get("enabled");
+								if(enabledVal == "TRUE" || enabledVal == true || enabledVal == "true" || enabledVal == 1 || enabledVal == "1")
+								{
+									channelRaw = ifnull(notifRecord.get("channel"),"");
+									if(channelRaw != null && channelRaw != "")
+									{
+										// Extract channel name (handles object, JSON string, or plain string)
+										try 
+										{
+											if(channelRaw.get("unique_name") != null)
+											{
+												notifyChannel = channelRaw.get("unique_name").toString();
+											}
+											else if(channelRaw.get("name") != null)
+											{
+												notifyChannel = channelRaw.get("name").toString();
+											}
+										}
+										catch (e)
+										{
+											notifyChannel = channelRaw.toString();
+										}
+										if(notifyChannel == "")
+										{
+											notifyChannel = channelRaw.toString();
+										}
+										// Remove # prefix and handle JSON strings
+										if(notifyChannel.startsWith("{"))
+										{
+											if(notifyChannel.contains("\"unique_name\""))
+											{
+												startIdx = notifyChannel.indexOf("\"unique_name\"");
+												valueStart = notifyChannel.indexOf("\"",startIdx + 13) + 1;
+												valueEnd = notifyChannel.indexOf("\"",valueStart);
+												if(valueStart > 0 && valueEnd > valueStart)
+												{
+													notifyChannel = notifyChannel.subString(valueStart,valueEnd);
+												}
+											}
+										}
+										if(notifyChannel.startsWith("#"))
+										{
+											notifyChannel = notifyChannel.subString(1);
+										}
+										break;
+									}
+								}
+							}
+						}
+					}
+				}
+				// Fallback to old system
+				if(notifyChannel == "" && prefsList != null && prefsList.size() > 0)
+				{
+					notifyChannel = ifnull(prefsList.get(0).get("channel"),"");
+					if(notifyChannel.startsWith("#"))
+					{
+						notifyChannel = notifyChannel.subString(1);
+					}
+				}
+				// Send notification
+				if(notifyChannel != "" && notifyChannel != null)
+				{
+					zoho.cliq.postToChannelAsBot(notifyChannel,"awscloudcommander",channelMsg);
+				}
+			}
+		}
+		else
+		{
+			errorMsg = ifnull(apiResponse.get("error"),"Unknown error");
+			response.put("text","📦 *Create Bucket Failed*\n\n❌ " + errorMsg);
+			response.put("card",{"title":"📦 S3 Error","theme":"prompt"});
+			response.put("buttons",{{"label":"➕ Try Again","hint":"Create new bucket","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_createform"},{"label":"📦 All Buckets","hint":"View all buckets","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_refresh"}});
+		}
+	}
+}
+// ============================================================================
+// ============================================================================
+// SECTION: S3 Bucket Deletion Form Processing (s3_delete_bucket)
+// ============================================================================
+// Processes S3 bucket deletion form submission
+// Deletes bucket via backend API (bucket must be empty)
+// Sends notification to configured channel after successful deletion
+// Returns confirmation card with deletion status
+// ============================================================================
+else if(formName == "s3_delete_bucket")
+{
+	bucketName = ifnull(formValues.get("bucketName"),"");
+	confirmName = ifnull(formValues.get("confirmName"),"");
+	if(bucketName == "" || confirmName == "")
+	{
+		response.put("text","📦 *Delete Bucket Error*\n\nBucket name and confirmation are required.");
+		response.put("card",{"title":"📦 S3 Error","theme":"prompt"});
+	}
+	else if(confirmName != bucketName)
+	{
+		response.put("text","📦 *Delete Bucket Error*\n\n❌ Bucket name doesn't match!\n\nYou entered: `" + confirmName + "`\nExpected: `" + bucketName + "`");
+		response.put("card",{"title":"📦 S3 Error","theme":"prompt"});
+		response.put("buttons",{{"label":"🗑️ Try Again","hint":"Delete bucket","type":"-","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_deleteconfirm_" + bucketName},{"label":"📦 All Buckets","hint":"View all buckets","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_refresh"}});
+	}
+	else
+	{
+		requestBody = Map();
+		requestBody.put("service","s3");
+		requestBody.put("userId",userId);
+		requestBody.put("region",userRegion);
+		requestBody.put("action","deleteBucket");
+		requestBody.put("bucket",bucketName);
+		apiResponse = invokeurl
+		[
+			url :API_URL
+			type :POST
+			parameters:requestBody.toString()
+			headers:{"Content-Type":"application/json"}
+			connection:"awscloudcommander"
+		];
+		if(apiResponse.get("success") == true)
+		{
+			response.put("text","*✅ Bucket Deleted Successfully!*\n\n🗑️ Bucket `" + bucketName + "` has been permanently deleted.");
+			response.put("card",{"theme":"modern-inline"});
+			response.put("buttons",{{"label":"📦 All Buckets","hint":"View all buckets","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_refresh"}});
+			// Send notification using dynamic notification system
+			channelMsg = Map();
+			channelMsg.put("text","*🗑️ S3 Bucket Deleted*\n\n👤 By: " + userName + "\n📦 Bucket: `" + bucketName + "`\n🕐 Time: " + zoho.currenttime.toString("dd MMM yyyy, hh:mm a") + "\n\n⚠️ This action is permanent.");
+			channelMsg.put("card",{"theme":"modern-inline"});
+			// Get notification channel for S3
+			notifyChannel = "";
+			notifQuery = Map();
+			notifQuery.put("criteria","userid==" + userId.toString());
+			allUserRecords = zoho.cliq.getRecords("awsnotifications",notifQuery);
+			if(allUserRecords != null && allUserRecords.get("status") == "SUCCESS")
+			{
+				notifList = allUserRecords.get("list");
+				if(notifList != null && notifList.size() > 0)
+				{
+					for each  notifRecord in notifList
+					{
+						if(notifRecord != null && ifnull(notifRecord.get("userid"),"").toString() == userId.toString() && ifnull(notifRecord.get("notificationtype"),"") == "s3")
+						{
+							enabledVal = notifRecord.get("enabled");
+							if(enabledVal == "TRUE" || enabledVal == true || enabledVal == "true" || enabledVal == 1 || enabledVal == "1")
+							{
+								channelRaw = ifnull(notifRecord.get("channel"),"");
+								if(channelRaw != null && channelRaw != "")
+								{
+									// Extract channel name (handles object, JSON string, or plain string)
+									try 
+									{
+										if(channelRaw.get("unique_name") != null)
+										{
+											notifyChannel = channelRaw.get("unique_name").toString();
+										}
+										else if(channelRaw.get("name") != null)
+										{
+											notifyChannel = channelRaw.get("name").toString();
+										}
+									}
+									catch (e)
+									{
+										notifyChannel = channelRaw.toString();
+									}
+									if(notifyChannel == "")
+									{
+										notifyChannel = channelRaw.toString();
+									}
+									// Remove # prefix and handle JSON strings
+									if(notifyChannel.startsWith("{"))
+									{
+										if(notifyChannel.contains("\"unique_name\""))
+										{
+											startIdx = notifyChannel.indexOf("\"unique_name\"");
+											valueStart = notifyChannel.indexOf("\"",startIdx + 13) + 1;
+											valueEnd = notifyChannel.indexOf("\"",valueStart);
+											if(valueStart > 0 && valueEnd > valueStart)
+											{
+												notifyChannel = notifyChannel.subString(valueStart,valueEnd);
+											}
+										}
+									}
+									if(notifyChannel.startsWith("#"))
+									{
+										notifyChannel = notifyChannel.subString(1);
+									}
+									break;
+								}
+							}
+						}
+					}
+				}
+			}
+			// Fallback to old system
+			if(notifyChannel == "")
+			{
+				prefsQuery = Map();
+				prefsQuery.put("criteria","userid==" + userId);
+				prefsRecords = zoho.cliq.getRecords("awsprefs",prefsQuery);
+				if(prefsRecords != null && prefsRecords.get("status") == "SUCCESS")
+				{
+					prefsList = prefsRecords.get("list");
+					if(prefsList != null && prefsList.size() > 0)
+					{
+						notifyChannel = ifnull(prefsList.get(0).get("channel"),"");
+						if(notifyChannel.startsWith("#"))
+						{
+							notifyChannel = notifyChannel.subString(1);
+						}
+					}
+				}
+			}
+			// Send notification
+			if(notifyChannel != "" && notifyChannel != null)
+			{
+				zoho.cliq.postToChannelAsBot(notifyChannel,"awscloudcommander",channelMsg);
+			}
+		}
+		else
+		{
+			errorMsg = ifnull(apiResponse.get("error"),"Unknown error");
+			response.put("text","📦 *Delete Bucket Failed*\n\n❌ " + errorMsg);
+			response.put("card",{"title":"📦 S3 Error","theme":"prompt"});
+			response.put("buttons",{{"label":"📦 All Buckets","hint":"View all buckets","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"s3_refresh"}});
+		}
+	}
+}
+// ============================================================================
+// ============================================================================
+// SECTION: CloudWatch Alarm Creation Form Processing (createAlarmForm)
+// ============================================================================
+// Processes CloudWatch alarm creation form submission
+// Creates alarm via backend API with specified metric, threshold, and actions
+// Sends notification to configured channel after successful creation
+// Returns confirmation card with alarm details
+// ============================================================================
+else if(formName == "createAlarmForm")
+{
+	// Extract form values
+	alarmName = ifnull(formValues.get("alarmName"),"");
+	description = ifnull(formValues.get("description"),"");
+	// Handle select inputs (Cliq returns objects with value property)
+	namespaceValue = formValues.get("namespace");
+	namespace = "";
+	if(namespaceValue != null)
+	{
+		if(namespaceValue.get("value") != null)
+		{
+			namespace = namespaceValue.get("value");
+		}
+		else
+		{
+			namespace = namespaceValue.toString();
+		}
+	}
+	// Convert namespace from form format (no slashes) to AWS format (with slashes)
+	// Form uses AWSEC2, AWSLambda, etc. because Zoho Cliq doesn't allow / in select values
+	if(namespace == "AWSEC2")
+	{
+		namespace = "AWS/EC2";
+	}
+	else if(namespace == "AWSLambda")
+	{
+		namespace = "AWS/Lambda";
+	}
+	else if(namespace == "AWSRDS")
+	{
+		namespace = "AWS/RDS";
+	}
+	else if(namespace == "AWSS3")
+	{
+		namespace = "AWS/S3";
+	}
+	else if(namespace == "AWSELB")
+	{
+		namespace = "AWS/ELB";
+	}
+	metricNameValue = formValues.get("metricName");
+	metricName = "";
+	if(metricNameValue != null)
+	{
+		if(metricNameValue.get("value") != null)
+		{
+			metricName = metricNameValue.get("value");
+		}
+		else
+		{
+			metricName = metricNameValue.toString();
+		}
+	}
+	statisticValue = formValues.get("statistic");
+	statistic = "Average";
+	if(statisticValue != null)
+	{
+		if(statisticValue.get("value") != null)
+		{
+			statistic = statisticValue.get("value");
+		}
+		else
+		{
+			statistic = statisticValue.toString();
+		}
+	}
+	comparisonValue = formValues.get("comparisonOperator");
+	comparisonOperator = "";
+	if(comparisonValue != null)
+	{
+		if(comparisonValue.get("value") != null)
+		{
+			comparisonOperator = comparisonValue.get("value");
+		}
+		else
+		{
+			comparisonOperator = comparisonValue.toString();
+		}
+	}
+	threshold = ifnull(formValues.get("threshold"),"0").toNumber();
+	periodValue = formValues.get("period");
+	period = 300;
+	if(periodValue != null)
+	{
+		if(periodValue.get("value") != null)
+		{
+			period = periodValue.get("value").toNumber();
+		}
+		else
+		{
+			period = periodValue.toString().toNumber();
+		}
+	}
+	evaluationPeriods = ifnull(formValues.get("evaluationPeriods"),"1").toNumber();
+	dimensionName = ifnull(formValues.get("dimensionName"),"");
+	dimensionValue = ifnull(formValues.get("dimensionValue"),"");
+	// Validate required fields
+	if(alarmName == "" || namespace == "" || metricName == "" || comparisonOperator == "")
+	{
+		response.put("text","*❌ Error*\n\nPlease fill in all required fields.");
+		response.put("card",{"theme":"modern-inline"});
+		return response;
+	}
+	// Check alarm limit (max 5 alarms per user)
+	limitCheckBody = Map();
+	limitCheckBody.put("service","cloudwatch");
+	limitCheckBody.put("userId",userId);
+	limitCheckBody.put("action","listAlarms");
+	limitCheckResponse = invokeurl
+	[
+		url :API_URL
+		type :POST
+		parameters:limitCheckBody.toString()
+		headers:{"Content-Type":"application/json"}
+		connection:"awscloudcommander"
+	];
+	if(limitCheckResponse.get("success") == true)
+	{
+		existingAlarms = limitCheckResponse.get("data");
+		if(existingAlarms != null && existingAlarms.size() >= 5)
+		{
+			response.put("text","*❌ Alarm Limit Reached*\n\nYou have reached the maximum of *5 alarms*.\n\nPlease delete an existing alarm before creating a new one.");
+			response.put("card",{"theme":"modern-inline"});
+			response.put("buttons",{{"label":"📋 View Alarms","hint":"View and manage alarms","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"alarms_list"}});
+			return response;
+		}
+	}
+	// Build request
+	requestBody = Map();
+	requestBody.put("service","cloudwatch");
+	requestBody.put("userId",userId);
+	requestBody.put("region",userRegion);
+	requestBody.put("action","createAlarm");
+	requestBody.put("alarmName",alarmName);
+	requestBody.put("description",description);
+	requestBody.put("namespace",namespace);
+	requestBody.put("metricName",metricName);
+	requestBody.put("statistic",statistic);
+	requestBody.put("comparisonOperator",comparisonOperator);
+	requestBody.put("threshold",threshold);
+	requestBody.put("period",period);
+	requestBody.put("evaluationPeriods",evaluationPeriods);
+	// Add dimensions if provided
+	if(dimensionName != "" && dimensionValue != "")
+	{
+		dimensions = List();
+		dimensions.add({"Name":dimensionName,"Value":dimensionValue});
+		requestBody.put("dimensions",dimensions);
+	}
+	// Call API
+	apiResponse = invokeurl
+	[
+		url :API_URL
+		type :POST
+		parameters:requestBody.toString()
+		headers:{"Content-Type":"application/json"}
+		connection:"awscloudcommander"
+	];
+	if(apiResponse.get("success") == true)
+	{
+		// Format comparison for display
+		comparisonText = comparisonOperator;
+		if(comparisonOperator == "GreaterThanThreshold")
+		{
+			comparisonText = ">";
+		}
+		else if(comparisonOperator == "GreaterThanOrEqualToThreshold")
+		{
+			comparisonText = ">=";
+		}
+		else if(comparisonOperator == "LessThanThreshold")
+		{
+			comparisonText = "<";
+		}
+		else if(comparisonOperator == "LessThanOrEqualToThreshold")
+		{
+			comparisonText = "<=";
+		}
+		periodMins = period / 60;
+		successText = "*✅ Alarm Created Successfully!*\n\n";
+		successText = successText + "🔔 *" + alarmName + "*\n\n";
+		successText = successText + "📊 *Configuration:*\n";
+		successText = successText + "• Namespace: `" + namespace + "`\n";
+		successText = successText + "• Metric: `" + metricName + "`\n";
+		successText = successText + "• Condition: " + statistic + " " + comparisonText + " " + threshold + "\n";
+		successText = successText + "• Period: " + periodMins + " min\n";
+		successText = successText + "• Evaluation Periods: " + evaluationPeriods + "\n";
+		if(dimensionName != "" && dimensionValue != "")
+		{
+			successText = successText + "• Dimension: " + dimensionName + " = " + dimensionValue + "\n";
+		}
+		// Send notification using dynamic notification system
+		notifMsg = Map();
+		notifMsg.put("text","🔔 *New CloudWatch Alarm Created*\n\n👤 *By:* " + userName + "\n📛 *Name:* " + alarmName + "\n📊 *Metric:* " + namespace + " / " + metricName + "\n⚡ *Condition:* " + statistic + " " + comparisonText + " " + threshold + "\n⏰ *Time:* " + zoho.currenttime.toString("dd MMM yyyy HH:mm"));
+		notifMsg.put("card",{"theme":"modern-inline"});
+		// Get notification channel for alarms
+		channelName = "";
+		notifQuery = Map();
+		notifQuery.put("criteria","userid==" + userId.toString());
+		allUserRecords = zoho.cliq.getRecords("awsnotifications",notifQuery);
+		if(allUserRecords != null && allUserRecords.get("status") == "SUCCESS")
+		{
+			notifList = allUserRecords.get("list");
+			if(notifList != null && notifList.size() > 0)
+			{
+				for each  notifRecord in notifList
+				{
+					if(notifRecord != null && ifnull(notifRecord.get("userid"),"").toString() == userId.toString() && ifnull(notifRecord.get("notificationtype"),"") == "alarms")
+					{
+						enabledVal = notifRecord.get("enabled");
+						if(enabledVal == "TRUE" || enabledVal == true || enabledVal == "true" || enabledVal == 1 || enabledVal == "1")
+						{
+							channelRaw = ifnull(notifRecord.get("channel"),"");
+							if(channelRaw != null && channelRaw != "")
+							{
+								// Extract channel name (handles object, JSON string, or plain string)
+								try 
+								{
+									if(channelRaw.get("unique_name") != null)
+									{
+										channelName = channelRaw.get("unique_name").toString();
+									}
+									else if(channelRaw.get("name") != null)
+									{
+										channelName = channelRaw.get("name").toString();
+									}
+								}
+								catch (e)
+								{
+									channelName = channelRaw.toString();
+								}
+								if(channelName == "")
+								{
+									channelName = channelRaw.toString();
+								}
+								// Remove # prefix and handle JSON strings
+								if(channelName.startsWith("{"))
+								{
+									if(channelName.contains("\"unique_name\""))
+									{
+										startIdx = channelName.indexOf("\"unique_name\"");
+										valueStart = channelName.indexOf("\"",startIdx + 13) + 1;
+										valueEnd = channelName.indexOf("\"",valueStart);
+										if(valueStart > 0 && valueEnd > valueStart)
+										{
+											channelName = channelName.subString(valueStart,valueEnd);
+										}
+									}
+								}
+								if(channelName.startsWith("#"))
+								{
+									channelName = channelName.subString(1);
+								}
+								break;
+							}
+						}
+					}
+				}
+			}
+		}
+		// Fallback to old system
+		if(channelName == "")
+		{
+			scheduleQuery = Map();
+			scheduleQuery.put("criteria","userid==" + userId);
+			scheduleRecords = zoho.cliq.getRecords("awsschedule",scheduleQuery);
+			if(scheduleRecords != null && scheduleRecords.get("status") == "SUCCESS")
+			{
+				scheduleList = scheduleRecords.get("list");
+				if(scheduleList != null && scheduleList.size() > 0)
+				{
+					schedule = scheduleList.get(0);
+					alertsVal = schedule.get("alertsenabled");
+					if(alertsVal == "TRUE" || alertsVal == true || alertsVal == "true" || alertsVal == 1 || alertsVal == "1")
+					{
+						prefsQuery = Map();
+						prefsQuery.put("criteria","userid==" + userId);
+						prefsRecords = zoho.cliq.getRecords("awsprefs",prefsQuery);
+						if(prefsRecords != null && prefsRecords.get("status") == "SUCCESS")
+						{
+							prefsList = prefsRecords.get("list");
+							if(prefsList != null && prefsList.size() > 0)
+							{
+								channelName = ifnull(prefsList.get(0).get("channel"),"");
+								if(channelName.startsWith("#"))
+								{
+									channelName = channelName.subString(1);
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		// Send notification
+		if(channelName != "" && channelName != null)
+		{
+			zoho.cliq.postToChannelAsBot(channelName,"awscloudcommander",notifMsg);
+		}
+		response.put("text",successText);
+		response.put("card",{"theme":"modern-inline"});
+		response.put("buttons",{{"label":"📋 View Alarm","hint":"View alarm details","type":"-","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"alarm_details_" + alarmName},{"label":"All Alarms","hint":"View all alarms","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"alarms_list"},{"label":"Dashboard","hint":"Return to dashboard","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"dashboard"}});
+	}
+	else
+	{
+		errorMsg = ifnull(apiResponse.get("error"),"Unknown error occurred");
+		response.put("text","*❌ Failed to Create Alarm*\n\n" + errorMsg);
+		response.put("card",{"theme":"modern-inline"});
+		response.put("buttons",{{"label":"Try Again","hint":"Create alarm again","type":"-","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"alarm_create"},{"label":"All Alarms","hint":"View all alarms","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"alarms_list"}});
+	}
+}
+// ============================================================================
+// ============================================================================
+// SECTION: SNS Message Publishing Form Processing (sns_publish_form)
+// ============================================================================
+// Processes SNS message publishing form submission
+// Validates user consent (consentsns flag) before publishing
+// Publishes message to specified SNS topic via backend API
+// Sends notification to configured channel after successful publish
+// Requires consent due to standard SNS pricing
+// ============================================================================
+else if(formName == "sns_publish_form")
+{
+	topicArn = ifnull(formValues.get("topicArn"),"");
+	subject = ifnull(formValues.get("subject"),"");
+	snsMessage = ifnull(formValues.get("message"),"");
+	// Extract topic name from ARN
+	topicName = topicArn;
+	if(topicArn.contains(":"))
+	{
+		arnParts = topicArn.toList(":");
+		topicName = arnParts.get(arnParts.size() - 1);
+	}
+	// Validate
+	if(topicArn == "" || snsMessage == "")
+	{
+		response.put("text","*❌ Error*\n\nTopic ARN and message are required.");
+		response.put("card",{"theme":"prompt"});
+		return response;
+	}
+	// Call API to publish
+	requestBody = Map();
+	requestBody.put("service","sns");
+	requestBody.put("userId",userId);
+	requestBody.put("region",userRegion);
+	requestBody.put("action","publish");
+	requestBody.put("topicArn",topicArn);
+	requestBody.put("message",snsMessage);
+	if(subject != "")
+	{
+		requestBody.put("subject",subject);
+	}
+	requestBody.put("consent",true);
+	apiResponse = invokeurl
+	[
+		url :API_URL
+		type :POST
+		parameters:requestBody.toString()
+		headers:{"Content-Type":"application/json"}
+		connection:"awscloudcommander"
+	];
+	if(apiResponse.get("success") == true)
+	{
+		// Send notification using dynamic notification system
+		notifMsg = Map();
+		notifMsg.put("text","📢 *SNS Message Published*\n\n👤 *By:* " + userName + "\n📨 *Topic:* " + topicName + "\n⏰ *Time:* " + zoho.currenttime.toString("dd MMM yyyy HH:mm"));
+		notifMsg.put("card",{"theme":"modern-inline"});
+		// Get notification channel for SNS
+		channelName = "";
+		notifQuery = Map();
+		notifQuery.put("criteria","userid==" + userId.toString());
+		allUserRecords = zoho.cliq.getRecords("awsnotifications",notifQuery);
+		if(allUserRecords != null && allUserRecords.get("status") == "SUCCESS")
+		{
+			notifList = allUserRecords.get("list");
+			if(notifList != null && notifList.size() > 0)
+			{
+				for each  notifRecord in notifList
+				{
+					if(notifRecord != null && ifnull(notifRecord.get("userid"),"").toString() == userId.toString() && ifnull(notifRecord.get("notificationtype"),"") == "sns")
+					{
+						enabledVal = notifRecord.get("enabled");
+						if(enabledVal == "TRUE" || enabledVal == true || enabledVal == "true" || enabledVal == 1 || enabledVal == "1")
+						{
+							channelRaw = ifnull(notifRecord.get("channel"),"");
+							if(channelRaw != null && channelRaw != "")
+							{
+								// Extract channel name (handles object, JSON string, or plain string)
+								try 
+								{
+									if(channelRaw.get("unique_name") != null)
+									{
+										channelName = channelRaw.get("unique_name").toString();
+									}
+									else if(channelRaw.get("name") != null)
+									{
+										channelName = channelRaw.get("name").toString();
+									}
+								}
+								catch (e)
+								{
+									channelName = channelRaw.toString();
+								}
+								if(channelName == "")
+								{
+									channelName = channelRaw.toString();
+								}
+								// Remove # prefix and handle JSON strings
+								if(channelName.startsWith("{"))
+								{
+									if(channelName.contains("\"unique_name\""))
+									{
+										startIdx = channelName.indexOf("\"unique_name\"");
+										valueStart = channelName.indexOf("\"",startIdx + 13) + 1;
+										valueEnd = channelName.indexOf("\"",valueStart);
+										if(valueStart > 0 && valueEnd > valueStart)
+										{
+											channelName = channelName.subString(valueStart,valueEnd);
+										}
+									}
+								}
+								if(channelName.startsWith("#"))
+								{
+									channelName = channelName.subString(1);
+								}
+								break;
+							}
+						}
+					}
+				}
+			}
+		}
+		// Fallback to old system
+		if(channelName == "")
+		{
+			scheduleQuery = Map();
+			scheduleQuery.put("criteria","userid==" + userId);
+			scheduleRecords = zoho.cliq.getRecords("awsschedule",scheduleQuery);
+			if(scheduleRecords != null && scheduleRecords.get("status") == "SUCCESS")
+			{
+				scheduleList = scheduleRecords.get("list");
+				if(scheduleList != null && scheduleList.size() > 0)
+				{
+					schedule = scheduleList.get(0);
+					alertsVal = schedule.get("alertsenabled");
+					if(alertsVal == "TRUE" || alertsVal == true || alertsVal == "true" || alertsVal == 1 || alertsVal == "1")
+					{
+						prefsQuery = Map();
+						prefsQuery.put("criteria","userid==" + userId);
+						prefsRecords = zoho.cliq.getRecords("awsprefs",prefsQuery);
+						if(prefsRecords != null && prefsRecords.get("status") == "SUCCESS")
+						{
+							prefsList = prefsRecords.get("list");
+							if(prefsList != null && prefsList.size() > 0)
+							{
+								channelName = ifnull(prefsList.get(0).get("channel"),"");
+								if(channelName.startsWith("#"))
+								{
+									channelName = channelName.subString(1);
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		// Send notification
+		if(channelName != "" && channelName != null)
+		{
+			zoho.cliq.postToChannelAsBot(channelName,"awscloudcommander",notifMsg);
+		}
+		// Truncate message for display
+		msgPreview = snsMessage;
+		if(snsMessage.length() > 100)
+		{
+			msgPreview = snsMessage.subString(0,100) + "...";
+		}
+		response.put("text","*✅ Message Published!*\n\n📨 *Topic:* " + topicName + "\n📝 *Message:* " + msgPreview);
+		response.put("card",{"theme":"modern-inline"});
+		response.put("buttons",{{"label":"📨 Publish Another","hint":"Send another message","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"sns_publish_" + topicArn},{"label":"👥 View Subscribers","hint":"See subscribers","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"sns_subs_" + topicArn},{"label":"📢 All Topics","hint":"View all topics","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"sns_list"},{"label":"🏠 Dashboard","hint":"Return to dashboard","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"dashboard"}});
+	}
+	else
+	{
+		errorMsg = ifnull(apiResponse.get("error"),"Failed to publish message");
+		response.put("text","*❌ Publish Failed*\n\n" + errorMsg);
+		response.put("card",{"theme":"prompt"});
+		response.put("buttons",{{"label":"Try Again","hint":"Retry publishing","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"sns_publish_" + topicArn},{"label":"📢 All Topics","hint":"View all topics","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"sns_list"}});
+	}
+}
+// ============================================================================
+// ============================================================================
+// SECTION: Notification Settings Form Processing (awsNotificationSettingsForm)
+// ============================================================================
+// Processes notification settings form submission
+// Updates awsnotifications table for each notification type:
+//   - EC2, S3, Alarms, SNS, Lambda, RDS, Daily Cost, Weekly Summary
+// Each type has: enabled flag (TRUE/FALSE) and channel (channel name)
+// Uses composite primary key (userid, notificationtype) for uniqueness
+// Preserves existing channel values if not changed in form
+// ============================================================================
+else if(formName == "awsNotificationSettingsForm")
+{
+	// Validate userId
+	if(userId == "")
+	{
+		response.put("text","*❌ Error*\n\nUser ID not found. Please try again.");
+		response.put("card",{"theme":"prompt"});
+		return response;
+	}
+	// Process each notification type
+	notifTypes = List();
+	notifTypes.add({"type":"ec2","enabledKey":"ec2_enabled","channelKey":"ec2_channel"});
+	notifTypes.add({"type":"s3","enabledKey":"s3_enabled","channelKey":"s3_channel"});
+	notifTypes.add({"type":"alarms","enabledKey":"alarms_enabled","channelKey":"alarms_channel"});
+	notifTypes.add({"type":"sns","enabledKey":"sns_enabled","channelKey":"sns_channel"});
+	notifTypes.add({"type":"lambda","enabledKey":"lambda_enabled","channelKey":"lambda_channel"});
+	notifTypes.add({"type":"rds","enabledKey":"rds_enabled","channelKey":"rds_channel"});
+	notifTypes.add({"type":"daily_cost","enabledKey":"daily_cost_enabled","channelKey":"daily_cost_channel"});
+	notifTypes.add({"type":"weekly_summary","enabledKey":"weekly_summary_enabled","channelKey":"weekly_summary_channel"});
+	savedCount = 0;
+	errorCount = 0;
+	for each  notifTypeMap in notifTypes
+	{
+		try 
+		{
+			notifType = notifTypeMap.get("type");
+			enabledKey = notifTypeMap.get("enabledKey");
+			channelKey = notifTypeMap.get("channelKey");
+			// Get enabled value
+			enabledVal = ifnull(formValues.get(enabledKey),false);
+			enabledStr = "FALSE";
+			if(enabledVal == true || enabledVal == "true" || enabledVal == 1 || enabledVal == "1" || enabledVal == "TRUE")
+			{
+				enabledStr = "TRUE";
+			}
+			// Get channel value from native_select
+			// native_select returns an object like: {"unique_name":"awsalerts","name":"#aws-alerts",...}
+			// IMPORTANT: Extract ONLY the channel name string, not the entire object
+			channelRaw = formValues.get(channelKey);
+			channelVal = "";
+			if(channelRaw != null)
+			{
+				channelObj = null;
+				// Check if it's a list
+				channelStr = channelRaw.toString();
+				if(channelStr.startsWith("["))
+				{
+					// It's a list - get first element
+					if(channelRaw.size() > 0)
+					{
+						channelObj = channelRaw.get(0);
+					}
+				}
+				else
+				{
+					// It's a direct object
+					channelObj = channelRaw;
+				}
+				// Extract channel unique_name from object - MUST be a string, not the object
+				if(channelObj != null)
+				{
+					// Check if channelObj is actually a Map/object
+					if(channelObj.toString().startsWith("{"))
+					{
+						// It's an object - extract unique_name
+						channelUniqueName = channelObj.get("unique_name");
+						if(channelUniqueName != null && channelUniqueName != "")
+						{
+							channelVal = channelUniqueName.toString();
+						}
+						else
+						{
+							// Fallback: try name and remove # prefix
+							channelNameVal = channelObj.get("name");
+							if(channelNameVal != null && channelNameVal != "")
+							{
+								channelVal = channelNameVal.toString();
+								if(channelVal.startsWith("#"))
+								{
+									channelVal = channelVal.subString(1);
+								}
+							}
+						}
+					}
+					else
+					{
+						// It's already a string
+						channelVal = channelObj.toString();
+					}
+				}
+			}
+			// Ensure channelVal is a string, not an object
+			if(channelVal != null && channelVal.toString().startsWith("{"))
+			{
+				// If somehow we got an object, extract unique_name
+				try 
+				{
+					channelMap = channelVal;
+					if(channelMap.get("unique_name") != null)
+					{
+						channelVal = channelMap.get("unique_name").toString();
+					}
+					else if(channelMap.get("name") != null)
+					{
+						channelVal = channelMap.get("name").toString();
+						if(channelVal.startsWith("#"))
+						{
+							channelVal = channelVal.subString(1);
+						}
+					}
+					else
+					{
+						channelVal = "";
+					}
+				}
+				catch (e)
+				{
+					channelVal = "";
+				}
+			}
+			// Check if record exists
+			// Query all records for this user, then find matching notificationtype
+			// This avoids issues with AND queries in criteria
+			notifQuery = Map();
+			notifQuery.put("criteria","userid==" + userId.toString());
+			allUserRecords = zoho.cliq.getRecords("awsnotifications",notifQuery);
+			// Find existing record for this notification type FIRST
+			// Must match BOTH userid AND notificationtype (composite primary key)
+			existingRecord = null;
+			recordId = "";
+			existingChannel = "";
+			if(allUserRecords != null && allUserRecords.get("status") == "SUCCESS")
+			{
+				existingList = allUserRecords.get("list");
+				if(existingList != null && existingList.size() > 0)
+				{
+					for each  rec in existingList
+					{
+						if(rec != null)
+						{
+							// Check both userid AND notificationtype match
+							recUserId = ifnull(rec.get("userid"),"").toString();
+							recNotifType = ifnull(rec.get("notificationtype"),"");
+							if(recUserId == userId.toString() && recNotifType == notifType)
+							{
+								existingRecord = rec;
+								recordId = ifnull(rec.get("id"),"");
+								// Extract existing channel value to preserve it if form doesn't provide one
+								existingChannelRaw = ifnull(rec.get("channel"),"");
+								if(existingChannelRaw != null && existingChannelRaw != "")
+								{
+									existingChannelStr = existingChannelRaw.toString();
+									// Handle if stored as object string
+									if(existingChannelStr.startsWith("{"))
+									{
+										try 
+										{
+											if(existingChannelRaw.get("unique_name") != null)
+											{
+												existingChannel = existingChannelRaw.get("unique_name").toString();
+											}
+											else if(existingChannelRaw.get("name") != null)
+											{
+												existingChannel = existingChannelRaw.get("name").toString();
+												if(existingChannel.startsWith("#"))
+												{
+													existingChannel = existingChannel.subString(1);
+												}
+											}
+										}
+										catch (e)
+										{
+											existingChannel = existingChannelStr;
+										}
+									}
+									else
+									{
+										existingChannel = existingChannelStr;
+										if(existingChannel.startsWith("#"))
+										{
+											existingChannel = existingChannel.subString(1);
+										}
+									}
+								}
+								break;
+							}
+						}
+					}
+				}
+			}
+			// If channelVal is empty but we have an existing channel, preserve it
+			// This handles the case where user doesn't change the channel dropdown
+			if((channelVal == null || channelVal == "") && existingChannel != "")
+			{
+				channelVal = existingChannel;
+			}
+			notifRecord = Map();
+			notifRecord.put("userid",userId);
+			notifRecord.put("notificationtype",notifType);
+			notifRecord.put("enabled",enabledStr);
+			// Ensure channel is always a string, never an object
+			channelValStr = "";
+			if(channelVal != null && channelVal != "")
+			{
+				channelValStr = channelVal.toString();
+				// If it's still an object string representation, extract the name
+				if(channelValStr.startsWith("{"))
+				{
+					channelValStr = "";
+				}
+				// Remove # prefix if present
+				if(channelValStr.startsWith("#"))
+				{
+					channelValStr = channelValStr.subString(1);
+				}
+			}
+			notifRecord.put("channel",channelValStr);
+			if(existingRecord != null && recordId != "")
+			{
+				// Update existing record
+				// Don't include "id" in the data map - it's passed as the second parameter
+				updateData = Map();
+				updateData.put("userid",userId);
+				updateData.put("notificationtype",notifType);
+				updateData.put("enabled",enabledStr);
+				updateData.put("channel",channelValStr);
+				updateResult = zoho.cliq.updateRecord("awsnotifications",recordId,updateData);
+				if(updateResult != null && updateResult.get("status") == "SUCCESS")
+				{
+					savedCount = savedCount + 1;
+				}
+				else
+				{
+					errorCount = errorCount + 1;
+					info "Failed to update notification record for " + notifType + ": " + updateResult;
+				}
+			}
+			else
+			{
+				// No record found - try to create
+				// If create fails with unique constraint, record exists - retry query and update
+				createResult = zoho.cliq.createRecord("awsnotifications",notifRecord);
+				if(createResult != null && createResult.get("status") == "SUCCESS")
+				{
+					savedCount = savedCount + 1;
+				}
+				else
+				{
+					// Check if it's a unique constraint violation (record exists)
+					errorCode = ifnull(createResult.get("code"),"");
+					if(errorCode == "platform_storage_unique_key_constraint_violated")
+					{
+						// Record exists but query didn't find it - retry query and update
+						retryQuery = Map();
+						retryQuery.put("criteria","userid==" + userId.toString());
+						retryResult = zoho.cliq.getRecords("awsnotifications",retryQuery);
+						if(retryResult != null && retryResult.get("status") == "SUCCESS")
+						{
+							retryList = retryResult.get("list");
+							if(retryList != null && retryList.size() > 0)
+							{
+								foundRecord = null;
+								for each  rec in retryList
+								{
+									if(rec != null)
+									{
+										// Check both userid AND notificationtype match (composite primary key)
+										recUserId = ifnull(rec.get("userid"),"").toString();
+										recNotifType = ifnull(rec.get("notificationtype"),"");
+										if(recUserId == userId.toString() && recNotifType == notifType)
+										{
+											foundRecord = rec;
+											break;
+										}
+									}
+								}
+								if(foundRecord != null)
+								{
+									// Found it - update
+									recordId = foundRecord.get("id");
+									// Don't include "id" in the data map - it's passed as the second parameter
+									updateData = Map();
+									updateData.put("userid",userId);
+									updateData.put("notificationtype",notifType);
+									updateData.put("enabled",enabledStr);
+									updateData.put("channel",channelValStr);
+									updateResult = zoho.cliq.updateRecord("awsnotifications",recordId,updateData);
+									if(updateResult != null && updateResult.get("status") == "SUCCESS")
+									{
+										savedCount = savedCount + 1;
+									}
+									else
+									{
+										errorCount = errorCount + 1;
+										info "Failed to update notification record for " + notifType + " (after create failed): " + updateResult;
+									}
+								}
+								else
+								{
+									errorCount = errorCount + 1;
+									info "Failed to create notification record for " + notifType + ": Unique constraint violation but record not found. " + createResult;
+								}
+							}
+							else
+							{
+								errorCount = errorCount + 1;
+								info "Failed to create notification record for " + notifType + ": " + createResult;
+							}
+						}
+						else
+						{
+							errorCount = errorCount + 1;
+							info "Failed to create notification record for " + notifType + ": " + createResult;
+						}
+					}
+					else
+					{
+						errorCount = errorCount + 1;
+						info "Failed to create notification record for " + notifType + ": " + createResult;
+					}
+				}
+			}
+		}
+		catch (e)
+		{
+			errorCount = errorCount + 1;
+			info "Error processing notification type " + notifType + ": " + e;
+		}
+	}
+	// Build response message
+	if(errorCount > 0)
+	{
+		response.put("text","*⚠️ Partial Success*\n\n📝 " + savedCount + " notification type(s) saved.\n❌ " + errorCount + " error(s) occurred.\n\nPlease check the database table exists and try again.");
+		response.put("card",{"theme":"prompt"});
+	}
+	else if(savedCount > 0)
+	{
+		successText = "*✅ Notification Settings Saved!*\n\n";
+		successText = successText + "📝 " + savedCount + " notification type(s) configured.\n\n";
+		successText = successText + "💡 Notifications will be sent to the configured channels when enabled.";
+		response.put("text",successText);
+		response.put("card",{"theme":"modern-inline"});
+	}
+	else
+	{
+		response.put("text","*❌ Error*\n\nNo settings were saved. Please check:\n1. Database table 'awsnotifications' exists\n2. Table has columns: userid, notificationtype, channel, enabled\n3. Try again");
+		response.put("card",{"theme":"prompt"});
+	}
+	response.put("buttons",{{"label":"🏠 Dashboard","hint":"Return to dashboard","type":"+","action":{"type":"invoke.function","data":{"name":"handleButton"}},"key":"dashboard"}});
+}
+else
+{
+	response.put("text","*Form submitted:* " + formName);
+}
+return response;

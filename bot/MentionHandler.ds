@@ -1,0 +1,146 @@
+// ============================================================================
+// AWS Cloud Commander - Bot Mention Handler
+// ============================================================================
+// Type: Mention Handler
+// Triggered: When user @mentions the bot in any conversation (channel/chat)
+// Purpose: Respond to mentions with helpful info & slash commands
+// NO BUTTONS - Just helpful text responses
+// ============================================================================
+
+// Get the message text safely
+mentionText = "";
+if(message != null)
+{
+    mentionText = message + "";
+}
+if(mentionText != "")
+{
+    mentionText = mentionText.replaceAll("@awscloudcommander", "");
+    mentionText = mentionText.replaceAll("@AWS Cloud Commander", "");
+    mentionText = mentionText.trim();
+}
+if(mentionText == "" || mentionText == null)
+{
+    mentionLower = "";
+}
+else
+{
+    mentionLower = mentionText.toLowerCase();
+}
+
+// Get user info safely
+userName = "there";
+if(user != null)
+{
+    userName = ifnull(user.get("first_name"), ifnull(user.get("name"), "there"));
+}
+
+// ======================== EMPTY MENTION ========================
+if(mentionText == "" || mentionLower == "")
+{
+    return {
+        "text": "Hey " + userName + "! You called?\n\n*Quick Commands:*\n• `/aws` - Dashboard\n• `/aws ec2` - EC2 instances\n• `/aws s3` - S3 buckets\n• `/aws cost` - Cost reports\n• `/aws help` - All commands",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== HELP ========================
+if(mentionLower == "help" || mentionLower == "?" || mentionLower.contains("what can you do"))
+{
+    helpText = "*AWS Cloud Commander - Quick Help*\n\n";
+    helpText = helpText + "• `/aws ec2` - Manage EC2 instances\n";
+    helpText = helpText + "• `/aws s3` - Browse S3 buckets\n";
+    helpText = helpText + "• `/aws cost` - View cost reports\n";
+    helpText = helpText + "• `/aws alarms` - CloudWatch alarms\n";
+    helpText = helpText + "• `/aws lambda` - Lambda functions\n";
+    helpText = helpText + "• Settings - Access via Bot Menu (⚙️ icon)\n\n";
+    helpText = helpText + "Use `/aws help` for full command list.";
+    return {"text": helpText, "card": {"theme": "modern-inline"}};
+}
+
+// ======================== EC2 / INSTANCES ========================
+if(mentionLower.contains("ec2") || mentionLower.contains("instance") || mentionLower.contains("server"))
+{
+    return {
+        "text": "*EC2 Instance Management*\n\n*Commands:*\n• `/aws ec2` - List all instances\n• `/aws ec2 start <id>` - Start instance\n• `/aws ec2 stop <id>` - Stop instance\n• `/aws ec2 summary` - Instance summary",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== S3 / BUCKETS ========================
+if(mentionLower.contains("s3") || mentionLower.contains("bucket") || mentionLower.contains("storage"))
+{
+    return {
+        "text": "*S3 Storage*\n\n*Commands:*\n• `/aws s3` - List all buckets\n• `/aws s3 create` - Create new bucket\n• `/aws s3 browse <bucket>` - Browse contents",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== COST ========================
+if(mentionLower.contains("cost") || mentionLower.contains("spend") || mentionLower.contains("bill") || mentionLower.contains("money"))
+{
+    return {
+        "text": "*AWS Cost Reports*\n\n*Commands:*\n• `/aws cost` - Today's costs\n• `/aws cost week` - Last 7 days\n• `/aws cost month` - Month-to-date\n• `/aws cost forecast` - Forecast\n\nEnable Cost Explorer in Bot Menu → Settings first.",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== LAMBDA ========================
+if(mentionLower.contains("lambda") || mentionLower.contains("function"))
+{
+    return {
+        "text": "*Lambda Functions*\n\n*Commands:*\n• `/aws lambda` - List functions\n• `/aws lambda summary` - Summary\n• `/aws lambda invoke <name>` - Invoke",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== ALARMS ========================
+if(mentionLower.contains("alarm") || mentionLower.contains("alert") || mentionLower.contains("monitor"))
+{
+    return {
+        "text": "*CloudWatch Alarms*\n\n*Commands:*\n• `/aws alarms` - All alarms\n• `/aws alarms active` - Active only\n\nSet up notifications in Bot Menu → Settings.",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== LOGS ========================
+if(mentionLower.contains("log"))
+{
+    return {
+        "text": "*CloudWatch Logs*\n\n*Commands:*\n• `/aws logs` - List log groups\n• `/aws logs errors` - Recent errors",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== RDS / DATABASE ========================
+if(mentionLower.contains("rds") || mentionLower.contains("database") || mentionLower.contains("db"))
+{
+    return {
+        "text": "*RDS Databases*\n\n*Commands:*\n• `/aws rds` - List databases\n• `/aws rds clusters` - Aurora clusters",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== DASHBOARD ========================
+if(mentionLower.contains("dashboard") || mentionLower.contains("overview") || mentionLower.contains("summary"))
+{
+    return {
+        "text": "*AWS Dashboard*\n\nUse `/aws` to open the dashboard with resource overview, quick actions, and cost summary.",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== SETTINGS ========================
+if(mentionLower.contains("setting") || mentionLower.contains("config"))
+{
+    return {
+        "text": "*Settings*\n\nUse Bot Menu → Settings to configure region, enable Cost Explorer, AI Assistant, and notifications.",
+        "card": {"theme": "modern-inline"}
+    };
+}
+
+// ======================== DEFAULT ========================
+return {
+    "text": "Hey " + userName + "! I heard you.\n\n*Quick Commands:*\n• `/aws` - Dashboard\n• `/aws ec2` - Instances\n• `/aws s3` - Buckets\n• `/aws cost` - Costs\n• `/aws help` - All commands",
+    "card": {"theme": "modern-inline"}
+};

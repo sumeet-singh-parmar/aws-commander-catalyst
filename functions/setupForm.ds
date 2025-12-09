@@ -1,0 +1,279 @@
+// ============================================================================
+// AWS Cloud Commander - Setup Type Selection Form
+// ============================================================================
+// Purpose: Collects user's AWS connection preference during initial setup
+//
+// This form is shown after the onboarding tour completes
+// Users choose one of three setup options:
+//   1. Quick Demo (shared_demo)     → Uses shared AWS account, marks onboarded immediately
+//   2. Own Credentials (own_credentials) → User provides AWS keys, marks onboarded after verification
+//   3. Own Backend (own_backend)    → User provides custom backend URL, marks onboarded after credentials
+//
+// Flow:
+//   - Option 1: Marks onboarded, copies shared credentials, shows completion card
+//   - Option 2: Shows credentials form, waits for submission
+//   - Option 3: Shows backend URL form, waits for submission
+//
+// Stores setup type in awssetup table for future reference
+// ============================================================================
+
+// Get user info safely
+userName = "there";
+userId = "";
+if(user != null)
+{
+    userName = ifnull(user.get("first_name"), ifnull(user.get("name"), "there"));
+    userId = ifnull(user.get("id"), "");
+}
+
+// Check if form is being submitted
+if(form != null && form.get("values") != null)
+{
+    // ============================================================================
+    // FORM SUBMITTED - Process the setup choice
+    // ============================================================================
+    
+    formValues = form.get("values");
+    
+    // Check if setuptype exists in values (to ensure it's a submission, not initial display)
+    if(formValues.get("setuptype") == null)
+    {
+        // Initial display - show form below
+    }
+    else
+    {
+        setupChoice = formValues.get("setuptype").get("value");
+    
+    // Handle Quick Demo setup
+    if(setupChoice == "quick_demo")
+    {
+        // 1. Mark user as onboarded in awsprefs
+        prefsQuery = Map();
+        prefsQuery.put("criteria", "userid==" + userId);
+        prefsRecords = zoho.cliq.getRecords("awsprefs", prefsQuery);
+        
+        if(prefsRecords != null && prefsRecords.get("status") == "SUCCESS")
+        {
+            prefsList = prefsRecords.get("list");
+            if(prefsList != null && prefsList.size() > 0)
+            {
+                // Update existing record
+                existingPrefs = prefsList.get(0);
+                recordId = existingPrefs.get("id");
+                
+                updateData = Map();
+                updateData.put("onboarded", "TRUE");
+                
+                zoho.cliq.updateRecord("awsprefs", recordId, updateData);
+            }
+            else
+            {
+                // Create new record
+                newPrefs = Map();
+                newPrefs.put("userid", userId);
+                newPrefs.put("onboarded", "TRUE");
+                newPrefs.put("region", "ap-south-1");
+                
+                zoho.cliq.createRecord("awsprefs", newPrefs);
+            }
+        }
+        
+        // 2. Create/update setup config in awssetup
+        setupQuery = Map();
+        setupQuery.put("criteria", "userid==" + userId);
+        setupRecords = zoho.cliq.getRecords("awssetup", setupQuery);
+        
+        setupData = Map();
+        setupData.put("userid", userId);
+        setupData.put("setuptype", "shared_demo");
+        setupData.put("backendurl", "");
+        setupData.put("credentialsstored", true);
+        
+        if(setupRecords != null && setupRecords.get("status") == "SUCCESS" && setupRecords.get("list").size() > 0)
+        {
+            // Update existing record
+            setupId = setupRecords.get("list").get(0).get("id");
+            zoho.cliq.updateRecord("awssetup", setupId, setupData);
+        }
+        else
+        {
+            // Create new record
+            zoho.cliq.createRecord("awssetup", setupData);
+        }
+        
+        // 3. Copy shared credentials to user_credentials table
+        // Get user's backend URL from awssetup (for Option 3: Own Backend)
+        DEFAULT_API_URL = "https://aws-cloudops-906900311.development.catalystserverless.com/server/aws_handler/";
+        API_URL = DEFAULT_API_URL;
+        if(userId != "")
+        {
+            setupQuery2 = Map();
+            setupQuery2.put("criteria","userid==" + userId);
+            setupRecords2 = zoho.cliq.getRecords("awssetup",setupQuery2);
+            if(setupRecords2 != null && setupRecords2.get("status") == "SUCCESS")
+            {
+                setupList2 = setupRecords2.get("list");
+                if(setupList2 != null && setupList2.size() > 0)
+                {
+                    setupRecord2 = setupList2.get(0);
+                    customBackendUrl = ifnull(setupRecord2.get("backendurl"),"");
+                    if(customBackendUrl != null && customBackendUrl != "")
+                    {
+                        API_URL = customBackendUrl;
+                    }
+                }
+            }
+        }
+        
+        credRequestBody = Map();
+        credRequestBody.put("service", "user_credentials");
+        credRequestBody.put("action", "copy_shared");
+        credRequestBody.put("userId", userId);
+        
+        try {
+            credResponse = invokeurl [
+                url: API_URL
+                type: POST
+                parameters: credRequestBody.toString()
+                headers: {"Content-Type": "application/json"}
+                connection: "awscloudcommander"
+            ];
+            
+            info "Copy shared credentials response: " + credResponse;
+        } catch(e) {
+            info "Error copying shared credentials: " + e;
+        }
+        
+        // 4. Show completion message and start feature tour
+        return {
+            "text": "🎉 *Setup Complete!*\n\nYou're connected to the shared demo AWS account.\n\nLet's explore the features available to you!\n\nClick below to start the feature tour →",
+            "card": {
+                "title": "Ready to Go!",
+                "thumbnail": "https://www.monks.com/data/styles/738x363_crop/s3/2024-12/AWS.png?VersionId=AgciRGgmrM5MOD.WFIdw68QeG8kI.JR.&h=c74750f6&itok=q-7iCrYZ",
+                "theme": "modern-inline"
+            },
+            "buttons": [
+                {
+                    "label": "Start Tour",
+                    "hint": "Start feature tour",
+                    "type": "+",
+                    "action": {
+                        "type": "invoke.function",
+                        "data": {"name": "featureTour"}
+                    },
+                    "key": "feature_notifications"
+                },
+                {
+                    "label": "Skip Tour",
+                    "hint": "Go to dashboard",
+                    "type": "-",
+                    "action": {
+                        "type": "invoke.function",
+                        "data": {"name": "handleButton"}
+                    },
+                    "key": "dashboard"
+                }
+            ],
+            "navigation": true
+        };
+    }
+    // Handle Own Credentials - Clear backendurl and trigger credentials form
+    else if(setupChoice == "own_credentials")
+    {
+        // Clear backendurl in awssetup (user switching from Option 3 to Option 2)
+        setupQuery = Map();
+        setupQuery.put("criteria", "userid==" + userId);
+        setupRecords = zoho.cliq.getRecords("awssetup", setupQuery);
+        
+        setupData = Map();
+        setupData.put("userid", userId);
+        setupData.put("setuptype", "own_credentials");
+        setupData.put("backendurl", ""); // Clear backendurl for Option 2
+        setupData.put("credentialsstored", false);
+        
+        if(setupRecords != null && setupRecords.get("status") == "SUCCESS" && setupRecords.get("list").size() > 0)
+        {
+            // Update existing record
+            setupId = setupRecords.get("list").get(0).get("id");
+            zoho.cliq.updateRecord("awssetup", setupId, setupData);
+        }
+        else
+        {
+            // Create new record
+            zoho.cliq.createRecord("awssetup", setupData);
+        }
+        
+        return {
+            "text": "🔑 *AWS Credentials Setup*\n\nYou'll provide your own AWS access keys. They will be encrypted and stored securely.\n\nClick below to enter your credentials →",
+            "card": {
+                "title": "Own Credentials",
+                "thumbnail": "https://cdn-icons-png.flaticon.com/512/6195/6195699.png",
+                "theme": "modern-inline"
+            },
+            "buttons": [
+                {
+                    "label": "Enter Credentials",
+                    "action": {
+                        "type": "invoke.function",
+                        "data": {"name": "credentialsForm"}
+                    },
+                    "key": "open_credentials_form"
+                }
+            ]
+        };
+    }
+    // Handle Own Backend - Trigger backend URL form
+    else if(setupChoice == "own_backend")
+    {
+        return {
+            "text": "⚙️ *Own Backend Setup*\n\nYou'll connect to your self-hosted Catalyst instance. Your backend will handle all AWS API calls.\n\nClick below to configure →",
+            "card": {
+                "title": "Own Backend",
+                "thumbnail": "https://cdn-icons-png.flaticon.com/512/2920/2920277.png",
+                "theme": "modern-inline"
+            },
+            "buttons": [
+                {
+                    "label": "Configure Backend",
+                    "action": {
+                        "type": "invoke.function",
+                        "data": {"name": "backendForm"}
+                    },
+                    "key": "open_backend_form"
+                }
+            ]
+        };
+    }
+    }
+}
+
+// ============================================================================
+// SHOW FORM - Initial display
+// ============================================================================
+
+// MUST use JSON array syntax [...] for forms, NOT list()!
+return {
+    "type": "form",
+    "title": "Setup Configuration",
+    "name": "setupForm",
+    "hint": "Quick Demo: Use shared AWS account (fastest, no setup)\nOwn Credentials: Provide your AWS access keys\nOwn Backend: Deploy your own Catalyst instance",
+    "button_label": "Continue",
+    "inputs": [
+        {
+            "type": "radio",
+            "name": "setuptype",
+            "label": "How do you want to connect to AWS?",
+            "mandatory": true,
+            "options": [
+                {"value": "quick_demo", "label": "Quick Demo - Shared AWS Account (Recommended)"},
+                {"value": "own_credentials", "label": "Own Credentials - Use Your AWS Keys"},
+                {"value": "own_backend", "label": "Own Backend - Self-Hosted Catalyst"}
+            ]
+        }
+    ],
+    "action": {
+        "type": "invoke.function",
+        "name": "setupForm"
+    }
+};
+

@@ -1,0 +1,86 @@
+// ============================================================================
+// AWS Cloud Commander - Create Incident Bot Menu Action Handler
+// ============================================================================
+// Purpose: Displays the incident creation form
+//
+// This handler is triggered when user clicks "Create Incident" in the Bot Menu
+//
+// Flow:
+//   1. Fetches user's custom backend URL (if Option 3)
+//   2. Verifies user has credentials configured (shows setup prompt if not)
+//   3. Returns incident creation form with fields:
+//      - Title (required)
+//      - Severity (Critical/High/Medium/Low)
+//      - Affected Resource (optional, e.g., ec2:i-12345)
+//      - Additional Notes (optional)
+//
+// Form submission is processed by handleForm.ds (awsIncidentForm)
+// Incidents are stored in awsincidents table
+// ============================================================================
+
+// Default API URL
+DEFAULT_API_URL = "https://aws-cloudops-906900311.development.catalystserverless.com/server/aws_handler/";
+
+// Get user info safely
+userId = "";
+if(user != null)
+{
+	userId = ifnull(user.get("id"),"");
+}
+
+// ----------------------------------------------------------------------------
+// GET USER'S BACKEND URL (for Option 3: Own Backend)
+// ----------------------------------------------------------------------------
+API_URL = DEFAULT_API_URL;
+if(userId != "")
+{
+	setupQuery = Map();
+	setupQuery.put("criteria","userid==" + userId);
+	setupRecords = zoho.cliq.getRecords("awssetup",setupQuery);
+	if(setupRecords != null && setupRecords.get("status") == "SUCCESS")
+	{
+		setupList = setupRecords.get("list");
+		if(setupList != null && setupList.size() > 0)
+		{
+			setupRecord = setupList.get(0);
+			customBackendUrl = ifnull(setupRecord.get("backendurl"),"");
+			if(customBackendUrl != null && customBackendUrl != "")
+			{
+				API_URL = customBackendUrl;
+			}
+		}
+	}
+}
+
+// ----------------------------------------------------------------------------
+// CHECK SETUP STATUS - Check awssetup table directly
+// ----------------------------------------------------------------------------
+// If user hasn't completed setup (no awssetup record or no setuptype), show setup prompt
+isSetupComplete = false;
+setupQuery = Map();
+setupQuery.put("criteria","userid==" + userId);
+setupCheckRecords = zoho.cliq.getRecords("awssetup",setupQuery);
+if(setupCheckRecords != null && setupCheckRecords.get("status") == "SUCCESS")
+{
+	setupCheckList = setupCheckRecords.get("list");
+	if(setupCheckList != null && setupCheckList.size() > 0)
+	{
+		setupCheckRecord = setupCheckList.get(0);
+		setupType = ifnull(setupCheckRecord.get("setuptype"),"");
+		// User has completed setup if setuptype is set
+		if(setupType != "" && setupType != null)
+		{
+			isSetupComplete = true;
+		}
+	}
+}
+
+// If setup not complete, prompt for setup - same card as ExecutionHandler.ds
+if(isSetupComplete == false)
+{
+	return {"text":"😒 Please complete your AWS setup first to use this extension.\n\nClick below to get started →","card":{"title":"*Setup Required*","thumbnail":"https://www.monks.com/data/styles/738x363_crop/s3/2024-12/AWS.png?VersionId=AgciRGgmrM5MOD.WFIdw68QeG8kI.JR.&h=c74750f6&itok=q-7iCrYZ","theme":"prompt"},"buttons":{{"label":"Start Setup","action":{"type":"invoke.function","data":{"name":"botTour"}},"key":"setup_info_start"}}};
+}
+
+// Return incident form
+return {"type":"form","title":"🚨 Create Incident","hint":"Report a new AWS incident","name":"awsIncidentForm","button_label":"🚨 Create Incident","inputs":[{"type":"text","name":"title","label":"Incident Title","placeholder":"Brief description of the issue","mandatory":true},{"type":"select","name":"severity","label":"Severity","placeholder":"Select severity level","mandatory":true,"value":"medium","options":[{"value":"critical","label":"Critical - Service Down"},{"value":"high","label":"High - Major Impact"},{"value":"medium","label":"Medium - Partial Impact"},{"value":"low","label":"Low - Minor Issue"}]},{"type":"text","name":"resource","label":"Affected Resource","placeholder":"e.g., ec2:i-1234567890abcdef0","mandatory":false},{"type":"textarea","name":"notes","label":"Additional Notes","placeholder":"Any additional information...","mandatory":false}],"action":{"type":"invoke.function","name":"handleForm"}};
+
